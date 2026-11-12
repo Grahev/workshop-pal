@@ -44,6 +44,10 @@ python manage.py seed_demo
 **Setup** `/admin/` (staff only): users and roles, sites, work centres, product types and their
 spec fields, route templates, hold reasons.
 
+**API** `/api/v1/` for connecting other systems: create and update jobs, record floor events,
+read the live board and attach files. See [docs/API.md](docs/API.md); interactive reference at
+`/api/v1/docs` once signed in. Keys are created in Setup → API keys.
+
 ### Roles
 
 | Role | Can do |
@@ -79,6 +83,7 @@ Live regions are inline template partials, so the full page and the HTMX refresh
 | `floor` | Immutable event log, issues, and the services that change operation status |
 | `attachments` | Files (drawings, photos, NCRs) linked to any record, with drawing revisions |
 | `board` | Live board views and the queries behind them (no models) |
+| `api` | REST API (Django Ninja) and API keys; calls the same services as the screens |
 
 ## Two rules
 

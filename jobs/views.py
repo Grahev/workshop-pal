@@ -45,7 +45,7 @@ def job_list(request):
 
 @office_required
 def job_create(request):
-    form = JobForm(request.POST or None, initial={"reference": _suggest_reference()})
+    form = JobForm(request.POST or None, initial={"reference": services.suggest_reference()})
     if request.method == "POST" and form.is_valid():
         job = form.save(commit=False)
         job.created_by = request.user
@@ -92,14 +92,6 @@ def job_archive(request, pk):
     job.save(update_fields=["is_archived"])
     messages.success(request, "Job archived." if job.is_archived else "Job restored.")
     return redirect("jobs:detail", pk=job.pk)
-
-
-def _suggest_reference():
-    """Next free J-number, as a starting point the user can overwrite."""
-    number = Job.objects.count() + 1001
-    while Job.objects.filter(reference=f"J-{number}").exists():
-        number += 1
-    return f"J-{number}"
 
 
 # ---------------------------------------------------------------- items

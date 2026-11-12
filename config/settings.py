@@ -30,6 +30,7 @@ INSTALLED_APPS = [
     "floor",
     "attachments",
     "board",
+    "api",
 ]
 
 MIDDLEWARE = [

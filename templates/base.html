@@ -17,6 +17,7 @@
         <a href="{% url 'jobs:list' %}" {% if app == "jobs" %}aria-current="page"{% endif %}>Jobs</a>
         <a href="{% url 'floor:home' %}" {% if app == "floor" %}aria-current="page"{% endif %}>Workstations</a>
         {% if user.is_staff %}<a href="{% url 'admin:index' %}">Setup</a>{% endif %}
+        {% if can_manage %}<a href="/api/v1/docs">API</a>{% endif %}
       </nav>
       {% endwith %}
       <span class="topbar-title">{% block topbar %}{% endblock %}</span>

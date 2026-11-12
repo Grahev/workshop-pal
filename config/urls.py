@@ -6,6 +6,7 @@ from django.contrib.auth.decorators import login_required
 from django.shortcuts import redirect
 
 from accounts.permissions import can_manage
+from api.api import api
 
 admin.site.site_header = "Workshop Pal"
 admin.site.site_title = "Workshop Pal"
@@ -24,6 +25,7 @@ urlpatterns = [
     path("jobs/", include("jobs.urls")),
     path("floor/", include("floor.urls")),
     path("files/", include("attachments.urls")),
+    path("api/v1/", api.urls),
     path("accounts/", include("django.contrib.auth.urls")),
     path("admin/", admin.site.urls),
 ]

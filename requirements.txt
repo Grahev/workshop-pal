@@ -2,3 +2,4 @@ Django>=6.0,<6.1
 dj-database-url>=2.2
 psycopg[binary]>=3.2
 Pillow>=11.0
+django-ninja>=1.8

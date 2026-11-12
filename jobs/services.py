@@ -2,7 +2,10 @@
 
 from django.db import transaction
 
-from .models import JobItem, SpecRevision
+from routing import services as routing_services
+from routing.models import RouteTemplate
+
+from .models import Job, JobItem, SpecRevision
 
 SPEC_PREFIX = "spec__"
 
@@ -78,3 +81,54 @@ def spec_from_post(item: JobItem, post) -> tuple[dict, list[str]]:
     if extra_key and extra_value:
         spec[extra_key] = extra_value
     return spec, errors
+
+
+def suggest_reference() -> str:
+    """Next free J-number, used when a job is created without a reference."""
+    number = Job.objects.count() + 1001
+    while Job.objects.filter(reference=f"J-{number}").exists():
+        number += 1
+    return f"J-{number}"
+
+
+def validate_spec(product_type, spec: dict) -> list[str]:
+    """Check a spec dict against a product type's field definitions. Returns error messages."""
+    errors = []
+    for definition in (product_type.spec_fields if product_type else None) or []:
+        if not isinstance(definition, dict) or not definition.get("key"):
+            continue
+        key, label = definition["key"], definition.get("label") or definition["key"]
+        value = spec.get(key)
+        if value in (None, ""):
+            if definition.get("required"):
+                errors.append(f"{label} is required.")
+            continue
+        if definition.get("type") == "number" and (isinstance(value, bool) or not isinstance(value, (int, float))):
+            errors.append(f"{label} must be a number.")
+        if definition.get("type") == "choice" and definition.get("choices") and value not in definition["choices"]:
+            errors.append(f"{label} must be one of: {', '.join(map(str, definition['choices']))}.")
+    return errors
+
+
+@transaction.atomic
+def create_item(job, name, product_type=None, quantity=1, spec=None, route_template=None,
+                operations=None, default_route=True) -> JobItem:
+    """Create an item and its route in one step.
+
+    Route, in order of preference: explicit `operations` (dicts with name,
+    work_centre, estimated_minutes), then `route_template`, then the product
+    type's active template when `default_route` is true.
+    """
+    item = JobItem.objects.create(
+        job=job, name=name, product_type=product_type, quantity=quantity, spec=spec or {}
+    )
+    if operations:
+        for operation in operations:
+            routing_services.add_operation(item, **operation)
+    elif route_template:
+        routing_services.apply_template(item, route_template)
+    elif default_route and product_type:
+        template = RouteTemplate.objects.filter(product_type=product_type, is_active=True).first()
+        if template:
+            routing_services.apply_template(item, template)
+    return item
