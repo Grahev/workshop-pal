@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load attachment_tags %}
 {% block title %}{{ job.reference }} {{ operation.name }} · Workshop Pal{% endblock %}
 {% block topbar %}{{ work_centre.name }}{% endblock %}
 
@@ -7,8 +8,9 @@
 
 <section class="card status-{{ operation.status }} card-detail">
   <div class="card-top">
-    <span class="ref">{{ job.reference }}</span>
+    <a class="ref" href="{% url 'jobs:detail' job.pk %}">{{ job.reference }}</a>
     <span class="badge badge-{{ operation.status }}">{{ operation.get_status_display }}</span>
+    {% if operation.rework_count %}<span class="badge badge-rework">Rework ×{{ operation.rework_count }}</span>{% endif %}
     <span class="code">OP-{{ operation.pk }}</span>
   </div>
   <h1>{{ operation.name }} · {{ item.name }}</h1>
@@ -61,6 +63,31 @@
         </form>
       </details>
     {% endif %}
+    {% if operation.status == "completed" and can_manage %}
+      <details class="hold">
+        <summary class="btn btn-warn">Send back for rework</summary>
+        <form class="hold-form" method="post" action="{% url 'floor:action' operation.pk 'rework' %}">{% csrf_token %}
+          <input type="hidden" name="station" value="{{ work_centre.pk }}"><input type="hidden" name="next" value="{{ next }}">
+          <label>What needs redoing <input type="text" name="note" autocomplete="off" required></label>
+          <button type="submit" class="btn btn-warn">Confirm rework</button>
+        </form>
+      </details>
+    {% endif %}
+
+    <details class="hold">
+      <summary class="btn">Raise issue</summary>
+      <form class="hold-form" method="post" action="{% url 'floor:issue' operation.pk %}" enctype="multipart/form-data">{% csrf_token %}
+        <input type="hidden" name="station" value="{{ work_centre.pk }}"><input type="hidden" name="next" value="{{ next }}">
+        <label>Type
+          <select name="category">
+            {% for value, label in issue_categories %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+          </select>
+        </label>
+        <label>What is wrong <input type="text" name="description" autocomplete="off" required></label>
+        <label>Photo (optional) <input type="file" name="photo" accept="image/*" capture="environment"></label>
+        <button type="submit" class="btn btn-primary">Raise issue</button>
+      </form>
+    </details>
     {% endwith %}
   </div>
 </section>
@@ -84,6 +111,9 @@
         {% endfor %}
       </ul>
     {% else %}<p class="empty">No files attached.</p>{% endif %}
+
+    {% attachment_panel operation "Photos for this step" %}
+    {% include "floor/_issues.html" with issues=issues %}
   </section>
 
   <section>

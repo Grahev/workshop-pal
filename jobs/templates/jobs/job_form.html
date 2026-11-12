@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}{% if job %}Edit {{ job.reference }}{% else %}New job{% endif %} · Workshop Pal{% endblock %}
+
+{% block content %}
+<section class="narrow-form">
+  <p class="crumbs"><a href="{% url 'jobs:list' %}">Jobs</a>{% if job %} › <a href="{% url 'jobs:detail' job.pk %}">{{ job.reference }}</a>{% endif %}</p>
+  <h1>{% if job %}Edit job{% else %}New job{% endif %}</h1>
+  <form method="post" class="form">
+    {% csrf_token %}
+    {{ form.as_div }}
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">{% if job %}Save changes{% else %}Create job{% endif %}</button>
+      <a class="btn btn-quiet" href="{% if job %}{% url 'jobs:detail' job.pk %}{% else %}{% url 'jobs:list' %}{% endif %}">Cancel</a>
+    </div>
+  </form>
+</section>
+{% endblock %}

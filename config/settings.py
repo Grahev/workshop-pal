@@ -29,6 +29,7 @@ INSTALLED_APPS = [
     "routing",
     "floor",
     "attachments",
+    "board",
 ]
 
 MIDDLEWARE = [
@@ -53,6 +54,7 @@ TEMPLATES = [
                 "django.template.context_processors.request",
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
+                "accounts.context_processors.roles",
             ],
         },
     },
@@ -89,13 +91,16 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 STATICFILES_DIRS = [BASE_DIR / "static"]
 
 LOGIN_URL = "login"
-LOGIN_REDIRECT_URL = "floor:home"
+LOGIN_REDIRECT_URL = "root"
 LOGOUT_REDIRECT_URL = "login"
 
 # Uploaded files. Local disk in development; swap the default storage for
 # django-storages (S3-compatible) in production.
 MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
+
+# Live board: an unfinished item due within this many days is flagged "at risk".
+BOARD_AT_RISK_DAYS = 2
 
 # Attachment limits (PRD T15)
 ATTACHMENT_MAX_BYTES = 50 * 1024 * 1024

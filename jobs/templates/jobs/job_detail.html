@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% load attachment_tags %}
+{% block title %}{{ job.reference }} · Workshop Pal{% endblock %}
+
+{% block content %}
+<p class="crumbs"><a href="{% url 'jobs:list' %}">Jobs</a></p>
+<div class="page-head">
+  <div>
+    <h1>{{ job.reference }} · {{ job.title }}</h1>
+    <p class="meta">
+      {{ job.customer.name }}{% if job.customer_reference %} · PO {{ job.customer_reference }}{% endif %}
+      · {{ job.get_priority_display }} priority
+      · {% if job.due_date %}Due {{ job.due_date|date:"D j M Y" }}{% else %}No due date{% endif %}
+      {% if job.is_archived %}<span class="badge">Archived</span>{% endif %}
+    </p>
+  </div>
+  {% if can_manage %}
+    <div class="actions">
+      <a class="btn" href="{% url 'jobs:edit' job.pk %}">Edit</a>
+      <form method="post" action="{% url 'jobs:archive' job.pk %}">{% csrf_token %}
+        <button class="btn btn-quiet">{% if job.is_archived %}Restore{% else %}Archive{% endif %}</button>
+      </form>
+    </div>
+  {% endif %}
+</div>
+{% if job.notes %}<p class="panel">{{ job.notes|linebreaksbr }}</p>{% endif %}
+
+<div class="page-head">
+  <h2>Items <span class="count">{{ rows|length }}</span></h2>
+  {% if can_manage %}<a class="btn btn-primary btn-small" href="{% url 'jobs:item_create' job.pk %}">Add item</a>{% endif %}
+</div>
+<div class="rows">
+  {% for row in rows %}
+    <a class="row status-{{ row.state }}" href="{% url 'jobs:item' row.item.pk %}">
+      <div class="row-job">
+        <div class="row-name">{{ row.item.name }}</div>
+        <div class="meta">{% if row.item.product_type %}{{ row.item.product_type.name }} · {% endif %}Qty {{ row.item.quantity }}</div>
+        <div class="chips">
+          {% for op in row.operations %}<span class="chip chip-{{ op.status }}" title="{{ op.get_status_display }}">{{ op.name }}</span>{% endfor %}
+        </div>
+      </div>
+      <div class="row-step">
+        <span class="badge badge-{{ row.state }}">{{ row.state_label }}</span>
+        {% if row.is_late %}<span class="badge badge-late">Late</span>{% elif row.at_risk %}<span class="badge badge-risk">At risk</span>{% endif %}
+        {% if row.current %}<div class="row-name">{{ row.current.name }}</div><div class="meta">{{ row.current.work_centre.name }}</div>{% endif %}
+        {% if row.held_since %}<div class="note note-hold">{{ row.current.hold_reason }} · {{ row.held_since|timesince }}</div>{% endif %}
+      </div>
+      <div class="row-progress">
+        <div class="bar" role="img" aria-label="{{ row.done }} of {{ row.total }} steps done"><span style="width: {{ row.percent }}%"></span></div>
+        <span class="meta">{{ row.done }} / {{ row.total }} steps</span>
+      </div>
+    </a>
+  {% empty %}
+    <p class="empty">No items yet. Add the first thing to be made for this job.</p>
+  {% endfor %}
+</div>
+
+<div class="columns">
+  <section>
+    {% attachment_panel job "Job files" %}
+    {% include "floor/_issues.html" with issues=issues %}
+  </section>
+  <section>
+    <h2>Timeline</h2>
+    {% if events %}
+      <ul class="timeline">
+        {% for event in events %}
+          <li>
+            <strong>{{ event.get_type_display }}</strong> · {{ event.operation.name }}
+            {% if event.hold_reason %}· {{ event.hold_reason }}{% endif %}
+            <span class="meta">{{ event.operation.item.name }} · {{ event.occurred_at|date:"D j M, H:i" }}{% if event.user %} · {{ event.user }}{% endif %}</span>
+            {% if event.note %}<p>{{ event.note }}</p>{% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}<p class="empty">Nothing has happened on the floor yet.</p>{% endif %}
+  </section>
+</div>
+{% endblock %}

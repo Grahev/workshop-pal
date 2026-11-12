@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Add item · {{ job.reference }} · Workshop Pal{% endblock %}
+
+{% block content %}
+<section class="narrow-form">
+  <p class="crumbs"><a href="{% url 'jobs:list' %}">Jobs</a> › <a href="{% url 'jobs:detail' job.pk %}">{{ job.reference }}</a></p>
+  <h1>Add item</h1>
+  <form method="post" class="form">
+    {% csrf_token %}
+    {{ form.as_div }}
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Add item</button>
+      <a class="btn btn-quiet" href="{% url 'jobs:detail' job.pk %}">Cancel</a>
+    </div>
+  </form>
+</section>
+{% endblock %}

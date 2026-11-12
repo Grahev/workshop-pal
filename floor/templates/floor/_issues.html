@@ -1,0 +1,32 @@
+{% load attachment_tags %}
+{# Expects: issues. Uses can_manage and request from the page context. #}
+<h2>Issues <span class="count">{{ issues|length }}</span></h2>
+{% if issues %}
+  <ul class="issues">
+    {% for issue in issues %}
+      <li class="{% if issue.is_open %}issue-open{% endif %}">
+        <div>
+          <span class="badge {% if issue.category == 'ncr' %}badge-late{% else %}badge-on_hold{% endif %}">{{ issue.get_category_display }}</span>
+          <span class="badge {% if issue.is_open %}badge-risk{% else %}badge-completed{% endif %}">{% if issue.is_open %}Open{% else %}Resolved{% endif %}</span>
+        </div>
+        <p>{{ issue.description|linebreaksbr }}</p>
+        <span class="meta">{{ issue.operation.name }} · {{ issue.operation.item.name }} · {{ issue.raised_at|date:"D j M, H:i" }}{% if issue.raised_by %} · {{ issue.raised_by }}{% endif %}</span>
+        {% for file in issue|attachments %}
+          <a class="thumb" href="{{ file.file.url }}" target="_blank" rel="noopener">
+            {% if file|is_image %}<img src="{{ file.file.url }}" alt="Photo for this issue" loading="lazy">{% else %}{{ file.original_filename }}{% endif %}
+          </a>
+        {% endfor %}
+        {% if not issue.is_open %}
+          <p class="meta">Resolved {{ issue.resolved_at|date:"D j M, H:i" }}{% if issue.resolved_by %} by {{ issue.resolved_by }}{% endif %}{% if issue.resolution %}: {{ issue.resolution }}{% endif %}</p>
+        {% elif can_manage %}
+          <form method="post" action="{% url 'jobs:issue_resolve' issue.pk %}" class="inline-form">
+            {% csrf_token %}
+            <input type="hidden" name="next" value="{{ request.get_full_path }}">
+            <input type="text" name="resolution" placeholder="What was done" aria-label="Resolution" autocomplete="off">
+            <button class="btn btn-small">Resolve</button>
+          </form>
+        {% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+{% else %}<p class="empty">No issues raised.</p>{% endif %}

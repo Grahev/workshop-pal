@@ -127,3 +127,33 @@ def skip_operation(operation, user=None, note=""):
 
 def add_note(operation, note, user=None, work_centre=None):
     return record_event(operation, Type.NOTE, user=user, work_centre=work_centre, note=note)
+
+
+# ---------------------------------------------------------------- issues
+
+@transaction.atomic
+def raise_issue(operation, description, user=None, category=None, photo=None, work_centre=None):
+    """Record a problem against an operation, optionally with a photo, and note it in the timeline."""
+    from attachments.models import Attachment
+    from attachments.services import attach
+
+    from .models import Issue
+
+    issue = Issue.objects.create(
+        operation=operation, description=description, raised_by=user,
+        category=category or Issue.Category.ISSUE,
+    )
+    if photo:
+        attach(issue, photo, category=Attachment.Category.PHOTO, user=user)
+    add_note(operation, f"{issue.get_category_display()} raised: {description}", user=user, work_centre=work_centre)
+    return issue
+
+
+def resolve_issue(issue, user=None, resolution=""):
+    if issue.resolved_at is None:
+        issue.resolved_at = timezone.now()
+        issue.resolved_by = user
+        issue.resolution = resolution
+        issue.save(update_fields=["resolved_at", "resolved_by", "resolution"])
+        add_note(issue.operation, f"{issue.get_category_display()} resolved. {resolution}".strip(), user=user)
+    return issue

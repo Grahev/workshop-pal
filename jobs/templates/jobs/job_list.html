@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Jobs · Workshop Pal{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>Jobs</h1>
+  {% if can_manage %}<a class="btn btn-primary" href="{% url 'jobs:create' %}">New job</a>{% endif %}
+</div>
+
+<form method="get" class="filters">
+  <input type="hidden" name="show" value="{{ show }}">
+  <input type="search" name="q" value="{{ q }}" placeholder="Search job number, title, customer or PO" aria-label="Search jobs">
+  <button type="submit" class="btn">Search</button>
+  <div class="seg" role="group" aria-label="Show">
+    <a href="?show=active{% if q %}&q={{ q|urlencode }}{% endif %}" {% if show == "active" %}aria-current="true"{% endif %}>Active</a>
+    <a href="?show=archived{% if q %}&q={{ q|urlencode }}{% endif %}" {% if show == "archived" %}aria-current="true"{% endif %}>Archived</a>
+  </div>
+</form>
+
+<div class="rows">
+  {% for job in jobs %}
+    <a class="row" href="{% url 'jobs:detail' job.pk %}">
+      <div class="row-job">
+        <span class="ref">{{ job.reference }}</span>
+        {% if job.priority >= 30 %}<span class="badge">{{ job.get_priority_display }}</span>{% endif %}
+        <div class="row-name">{{ job.title }}</div>
+        <div class="meta">{{ job.customer.name }}{% if job.customer_reference %} · PO {{ job.customer_reference }}{% endif %}</div>
+      </div>
+      <div class="row-step">
+        <div class="row-name">{% if job.due_date %}Due {{ job.due_date|date:"D j M Y" }}{% else %}No due date{% endif %}</div>
+        <div class="meta">{{ job.item_count }} item{{ job.item_count|pluralize }}</div>
+      </div>
+      <div class="row-progress">
+        <div class="bar" role="img" aria-label="{{ job.op_done }} of {{ job.op_total }} steps done"><span style="width: {% widthratio job.op_done job.op_total|default:1 100 %}%"></span></div>
+        <span class="meta">{{ job.op_done }} / {{ job.op_total }} steps</span>
+      </div>
+    </a>
+  {% empty %}
+    <p class="empty">{% if q %}No jobs match "{{ q }}".{% elif show == "archived" %}No archived jobs.{% else %}No jobs yet.{% endif %}</p>
+  {% endfor %}
+</div>
+{% endblock %}

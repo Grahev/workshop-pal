@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}Live board · Workshop Pal{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>Live board</h1>
+  <div class="seg" role="group" aria-label="Board view">
+    <a href="?view=items" {% if view == "items" %}aria-current="true"{% endif %}>By job</a>
+    <a href="?view=centres" {% if view == "centres" %}aria-current="true"{% endif %}>By work centre</a>
+  </div>
+</div>
+
+<form method="get" class="filters">
+  <input type="hidden" name="view" value="{{ view }}">
+  <input type="search" name="q" value="{{ f.q }}" placeholder="Search job, item or customer" aria-label="Search">
+  <select name="customer" aria-label="Customer" onchange="this.form.submit()">
+    <option value="">All customers</option>
+    {% for customer in customers %}<option value="{{ customer.pk }}" {% if customer.pk == f.customer %}selected{% endif %}>{{ customer.name }}</option>{% endfor %}
+  </select>
+  <select name="work_centre" aria-label="Work centre" onchange="this.form.submit()">
+    <option value="">All work centres</option>
+    {% for wc in work_centres %}<option value="{{ wc.pk }}" {% if wc.pk == f.work_centre %}selected{% endif %}>{{ wc.name }}</option>{% endfor %}
+  </select>
+  {% if view == "items" %}
+  <select name="status" aria-label="Status" onchange="this.form.submit()">
+    {% for value, label in status_choices %}<option value="{{ value }}" {% if value == f.status %}selected{% endif %}>{{ label }}</option>{% endfor %}
+  </select>
+  {% endif %}
+  <button type="submit" class="btn">Filter</button>
+  {% if filtered %}<a class="btn btn-quiet" href="?view={{ view }}">Clear</a>{% endif %}
+</form>
+
+<div id="live" hx-get="{{ request.get_full_path }}" hx-trigger="every 5s" hx-swap="innerHTML">
+{% partialdef live inline %}
+  <div class="stats">
+    <a class="stat" href="?view={{ view }}"><span class="stat-n">{{ summary.active }}</span><span>Active items</span></a>
+    <a class="stat" href="?view=items&amp;status=in_progress"><span class="stat-n">{{ summary.in_progress }}</span><span>In progress</span></a>
+    <a class="stat {% if summary.on_hold %}stat-warn{% endif %}" href="?view=items&amp;status=on_hold"><span class="stat-n">{{ summary.on_hold }}</span><span>On hold</span></a>
+    <a class="stat {% if summary.late %}stat-danger{% endif %}" href="?view=items&amp;status=late"><span class="stat-n">{{ summary.late }}</span><span>Late</span></a>
+    <a class="stat {% if summary.at_risk %}stat-warn{% endif %}" href="?view=items&amp;status=attention"><span class="stat-n">{{ summary.at_risk }}</span><span>At risk</span></a>
+  </div>
+
+  {% if view == "centres" %}
+    <div class="lanes">
+      {% for lane in lanes %}
+        <section class="lane">
+          <h2><a href="{% url 'floor:station' lane.work_centre.pk %}">{{ lane.work_centre.name }}</a></h2>
+          {% for op in lane.active %}{% partial lanecard %}{% endfor %}
+          {% for op in lane.on_hold %}{% partial lanecard %}{% endfor %}
+          {% for op in lane.ready %}{% partial lanecard %}{% endfor %}
+          {% if lane.upcoming %}
+            <p class="lane-sub">Coming up</p>
+            {% for op in lane.upcoming %}{% partial lanecard %}{% endfor %}
+          {% endif %}
+          {% if not lane.active and not lane.on_hold and not lane.ready and not lane.upcoming %}
+            <p class="lane-empty">Nothing here</p>
+          {% endif %}
+        </section>
+      {% empty %}
+        <p class="empty">No work centres set up yet.</p>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="rows">
+      {% for row in rows %}
+        <a class="row status-{{ row.state }}" href="{% url 'jobs:item' row.item.pk %}">
+          <div class="row-job">
+            <span class="ref">{{ row.job.reference }}</span>
+            {% if row.is_late %}<span class="badge badge-late">Late</span>{% elif row.at_risk %}<span class="badge badge-risk">At risk</span>{% endif %}
+            {% if row.job.priority >= 30 %}<span class="badge">{{ row.job.get_priority_display }}</span>{% endif %}
+            <div class="row-name">{{ row.item.name }}</div>
+            <div class="meta">{{ row.job.customer.name }}{% if row.job.due_date %} · Due {{ row.job.due_date|date:"D j M" }}{% endif %}</div>
+          </div>
+          <div class="row-step">
+            <span class="badge badge-{{ row.state }}">{{ row.state_label }}</span>
+            {% if row.current %}
+              <div class="row-name">{{ row.current.name }}</div>
+              <div class="meta">{{ row.current.work_centre.name }}</div>
+              {% if row.held_since %}<div class="note note-hold">{{ row.current.hold_reason }} · {{ row.held_since|timesince }}</div>{% endif %}
+            {% elif row.state == "no_route" %}
+              <div class="meta">Needs a route before work can start</div>
+            {% endif %}
+          </div>
+          <div class="row-progress">
+            <div class="bar" role="img" aria-label="{{ row.done }} of {{ row.total }} steps done"><span style="width: {{ row.percent }}%"></span></div>
+            <span class="meta">{{ row.done }} / {{ row.total }} steps</span>
+          </div>
+        </a>
+      {% empty %}
+        <p class="empty">{% if filtered %}Nothing matches these filters.{% else %}No active items. Create a job to get started.{% endif %}</p>
+      {% endfor %}
+    </div>
+  {% endif %}
+  <p class="meta updated">Updated {{ now|time:"H:i:s" }}</p>
+{% endpartialdef %}
+</div>
+
+{% partialdef lanecard %}
+<a class="lanecard status-{{ op.status }}" href="{% url 'floor:operation' op.pk %}?station={{ op.work_centre_id }}">
+  <span class="ref">{{ op.item.job.reference }}</span>
+  {% if op.status != "pending" %}<span class="badge badge-{{ op.status }}">{{ op.get_status_display }}</span>{% endif %}
+  {% if op.is_late %}<span class="badge badge-late">Late</span>{% endif %}
+  <div class="row-name">{{ op.name }} · {{ op.item.name }}</div>
+  {% if op.status == "on_hold" %}<div class="note note-hold">{{ op.hold_reason }} · {{ op.status_changed_at|timesince }}</div>
+  {% elif op.waiting_on %}<div class="meta">Blocked by {{ op.waiting_on|join:", " }}</div>
+  {% elif op.earlier_steps and op.status == "pending" %}<div class="meta">After {{ op.earlier_steps|last }}</div>{% endif %}
+</a>
+{% endpartialdef %}
+{% endblock %}

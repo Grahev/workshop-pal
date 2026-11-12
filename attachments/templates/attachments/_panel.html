@@ -1,0 +1,73 @@
+{% load attachment_tags %}
+<h2>{{ title }} <span class="count">{{ attachments|length }}</span></h2>
+{% if attachments %}
+  <ul class="files">
+    {% for file in attachments %}
+      <li>
+        <div class="file-main">
+          {% if file|is_image %}<a class="thumb" href="{{ file.file.url }}" target="_blank" rel="noopener"><img src="{{ file.file.url }}" alt="" loading="lazy"></a>{% endif %}
+          <div>
+            <a href="{{ file.file.url }}" target="_blank" rel="noopener">{{ file.original_filename }}</a>
+            <span class="meta">{{ file.get_category_display }}{% if file.revision %} · rev {{ file.revision }}{% endif %} · {{ file.size|filesizeformat }} · {{ file.uploaded_at|date:"j M, H:i" }}{% if file.uploaded_by %} · {{ file.uploaded_by }}{% endif %}</span>
+            {% if file.notes %}<span class="meta">{{ file.notes }}</span>{% endif %}
+          </div>
+        </div>
+        {% if can_manage %}
+          <div class="file-tools">
+            {% if file.category == "drawing" %}
+              <details class="disclosure">
+                <summary class="btn btn-small">New revision</summary>
+                <form method="post" action="{% url 'attachments:supersede' file.pk %}" enctype="multipart/form-data" class="form panel">
+                  {% csrf_token %}
+                  <input type="hidden" name="next" value="{{ next }}">
+                  <div><label>Revision <input type="text" name="revision" required autocomplete="off" placeholder="e.g. B"></label></div>
+                  <div><label>File <input type="file" name="file" required></label></div>
+                  <div class="form-actions"><button class="btn btn-primary">Upload revision</button></div>
+                </form>
+              </details>
+            {% endif %}
+            <form method="post" action="{% url 'attachments:archive' file.pk %}">
+              {% csrf_token %}
+              <input type="hidden" name="next" value="{{ next }}">
+              <button class="btn btn-small btn-quiet">Archive</button>
+            </form>
+          </div>
+        {% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+{% else %}
+  <p class="empty">No files attached.</p>
+{% endif %}
+{% if history_count %}<p class="meta">{{ history_count }} older revision{{ history_count|pluralize }} kept in history.</p>{% endif %}
+
+<div class="upload-row">
+  {# Opens the camera on phones and tablets and uploads as soon as the photo is taken. #}
+  <form method="post" action="{% url 'attachments:upload' %}" enctype="multipart/form-data">
+    {% csrf_token %}
+    <input type="hidden" name="content_type" value="{{ target_ct }}">
+    <input type="hidden" name="object_id" value="{{ target_id }}">
+    <input type="hidden" name="category" value="photo">
+    <input type="hidden" name="next" value="{{ next }}">
+    <label class="btn btn-small">Take photo
+      <input type="file" name="file" accept="image/*" capture="environment" class="visually-hidden" onchange="this.form.submit()">
+    </label>
+  </form>
+  <details class="disclosure">
+    <summary class="btn btn-small">Attach file</summary>
+    <form method="post" action="{% url 'attachments:upload' %}" enctype="multipart/form-data" class="form panel">
+      {% csrf_token %}
+      <input type="hidden" name="content_type" value="{{ target_ct }}">
+      <input type="hidden" name="object_id" value="{{ target_id }}">
+      <input type="hidden" name="next" value="{{ next }}">
+      <div><label>File <input type="file" name="file" required></label></div>
+      <div><label>Type
+        <select name="category">
+          {% for value, label in categories %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+        </select></label></div>
+      <div><label>Revision (drawings) <input type="text" name="revision" autocomplete="off" placeholder="e.g. A"></label></div>
+      <div><label>Note (optional) <input type="text" name="notes" autocomplete="off"></label></div>
+      <div class="form-actions"><button class="btn btn-primary">Upload</button></div>
+    </form>
+  </details>
+</div>

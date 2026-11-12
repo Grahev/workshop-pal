@@ -9,9 +9,17 @@
 </head>
 <body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
   <header class="topbar">
-    <a class="brand" href="{% url 'floor:home' %}">Workshop Pal</a>
-    <span class="topbar-title">{% block topbar %}{% endblock %}</span>
+    <a class="brand" href="{% url 'root' %}">Workshop Pal</a>
     {% if user.is_authenticated %}
+      {% with app=request.resolver_match.app_name %}
+      <nav class="nav" aria-label="Main">
+        <a href="{% url 'board:board' %}" {% if app == "board" %}aria-current="page"{% endif %}>Board</a>
+        <a href="{% url 'jobs:list' %}" {% if app == "jobs" %}aria-current="page"{% endif %}>Jobs</a>
+        <a href="{% url 'floor:home' %}" {% if app == "floor" %}aria-current="page"{% endif %}>Workstations</a>
+        {% if user.is_staff %}<a href="{% url 'admin:index' %}">Setup</a>{% endif %}
+      </nav>
+      {% endwith %}
+      <span class="topbar-title">{% block topbar %}{% endblock %}</span>
       <form method="post" action="{% url 'logout' %}" class="topbar-user">
         {% csrf_token %}
         <span>{{ user }}</span>

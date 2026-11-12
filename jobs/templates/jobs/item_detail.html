@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% load attachment_tags %}
+{% block title %}{{ item.name }} · {{ job.reference }} · Workshop Pal{% endblock %}
+
+{% block content %}
+<p class="crumbs"><a href="{% url 'jobs:list' %}">Jobs</a> › <a href="{% url 'jobs:detail' job.pk %}">{{ job.reference }}</a></p>
+<div class="page-head">
+  <div>
+    <h1>{{ item.name }}</h1>
+    <p class="meta">
+      {{ job.customer.name }} · {% if item.product_type %}{{ item.product_type.name }} · {% endif %}Qty {{ item.quantity }}
+      · {% if job.due_date %}Due {{ job.due_date|date:"D j M Y" }}{% else %}No due date{% endif %}
+      <span class="badge badge-{{ row.state }}">{{ row.state_label }}</span>
+      {% if row.is_late %}<span class="badge badge-late">Late</span>{% elif row.at_risk %}<span class="badge badge-risk">At risk</span>{% endif %}
+    </p>
+  </div>
+</div>
+
+<div class="columns">
+  <section>
+    {% if can_manage %}
+      <details class="disclosure" {% if form.errors %}open{% endif %}>
+        <summary class="btn btn-small">Edit item details</summary>
+        <form method="post" class="form panel">
+          {% csrf_token %}
+          {{ form.as_div }}
+          <div class="form-actions"><button type="submit" class="btn btn-primary">Save item</button></div>
+        </form>
+      </details>
+    {% endif %}
+
+    <h2>Specification <span class="count">v{{ item.spec_version }}</span></h2>
+    {% if can_manage %}
+      <form method="post" action="{% url 'jobs:item_spec' item.pk %}" class="form panel">
+        {% csrf_token %}
+        {% for field in spec_fields %}
+          <div>
+            <label for="id_{{ field.name }}">{{ field.label }}{% if field.required %} *{% endif %}</label>
+            {% if field.type == "choice" %}
+              <select id="id_{{ field.name }}" name="{{ field.name }}" {% if field.required %}required{% endif %}>
+                <option value="">Choose…</option>
+                {% for choice in field.choices %}<option value="{{ choice }}" {% if choice == field.value %}selected{% endif %}>{{ choice }}</option>{% endfor %}
+              </select>
+            {% elif field.type == "textarea" %}
+              <textarea id="id_{{ field.name }}" name="{{ field.name }}" rows="3" {% if field.required %}required{% endif %}>{{ field.value }}</textarea>
+            {% else %}
+              <input id="id_{{ field.name }}" name="{{ field.name }}" value="{{ field.value }}"
+                     type="{% if field.type == 'number' %}number{% else %}text{% endif %}" {% if field.type == "number" %}step="any" inputmode="decimal"{% endif %}
+                     autocomplete="off" {% if field.required %}required{% endif %}>
+            {% endif %}
+          </div>
+        {% empty %}
+          <p class="meta">{% if item.product_type %}This product type has no spec fields defined yet.{% else %}No product type set, so there are no predefined fields.{% endif %} Add what this item needs below.</p>
+        {% endfor %}
+        <fieldset class="extra">
+          <legend>Add another field</legend>
+          <div class="pair">
+            <input type="text" name="extra_key" placeholder="Name, e.g. Glass type" aria-label="New field name" autocomplete="off">
+            <input type="text" name="extra_value" placeholder="Value" aria-label="New field value" autocomplete="off">
+          </div>
+        </fieldset>
+        <div class="form-actions"><button type="submit" class="btn btn-primary">Save spec</button></div>
+      </form>
+    {% else %}
+      <dl class="spec">
+        {% for field in spec_fields %}<div><dt>{{ field.label }}</dt><dd>{{ field.value|default:"—" }}</dd></div>{% empty %}<div><dt>No spec recorded</dt><dd></dd></div>{% endfor %}
+      </dl>
+    {% endif %}
+
+    {% attachment_panel item "Drawings and files" %}
+  </section>
+
+  <section id="route">
+    <h2>Route <span class="count">{{ row.done }} / {{ row.total }}</span></h2>
+    {% if operations %}
+      <ol class="route route-edit">
+        {% for op in operations %}
+          <li class="status-{{ op.status }}">
+            <div class="route-main">
+              <a href="{% url 'floor:operation' op.pk %}"><strong>{{ op.name }}</strong></a>
+              <span class="meta">{{ op.work_centre.name }}{% if op.estimated_minutes %} · {{ op.estimated_minutes }} min{% endif %}</span>
+              {% if op.status == "on_hold" %}<span class="note note-hold">{{ op.hold_reason }}</span>{% endif %}
+            </div>
+            <span class="badge badge-{{ op.status }}">{{ op.get_status_display }}</span>
+            {% if can_manage %}
+              <div class="route-tools">
+                <form method="post" action="{% url 'jobs:operation_move' op.pk 'up' %}">{% csrf_token %}
+                  <button class="btn btn-icon" aria-label="Move {{ op.name }} up" {% if forloop.first %}disabled{% endif %}>↑</button></form>
+                <form method="post" action="{% url 'jobs:operation_move' op.pk 'down' %}">{% csrf_token %}
+                  <button class="btn btn-icon" aria-label="Move {{ op.name }} down" {% if forloop.last %}disabled{% endif %}>↓</button></form>
+                {% if op.status == "pending" %}
+                  <a class="btn btn-small" href="{% url 'jobs:operation_edit' op.pk %}">Edit</a>
+                  {% if op.can_remove %}
+                    <form method="post" action="{% url 'jobs:operation_remove' op.pk %}">{% csrf_token %}
+                      <button class="btn btn-small">Remove</button></form>
+                  {% endif %}
+                  <form method="post" action="{% url 'jobs:operation_skip' op.pk %}">{% csrf_token %}
+                    <button class="btn btn-small">Skip</button></form>
+                {% endif %}
+              </div>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ol>
+    {% else %}
+      <p class="empty">No route yet. {% if can_manage %}Start from a template or add steps one by one.{% endif %}</p>
+      {% if can_manage and templates %}
+        <form method="post" action="{% url 'jobs:route_apply' item.pk %}" class="inline-form">
+          {% csrf_token %}
+          <select name="template" aria-label="Route template" required>
+            <option value="">Choose a route template…</option>
+            {% for template in templates %}<option value="{{ template.pk }}">{{ template.name }}</option>{% endfor %}
+          </select>
+          <button type="submit" class="btn btn-primary">Use template</button>
+        </form>
+      {% endif %}
+    {% endif %}
+
+    {% if can_manage %}
+      <details class="disclosure">
+        <summary class="btn btn-small">Add a step</summary>
+        <form method="post" action="{% url 'jobs:operation_add' item.pk %}" class="form panel">
+          {% csrf_token %}
+          {{ operation_form.as_div }}
+          <div class="form-actions"><button type="submit" class="btn btn-primary">Add step</button></div>
+        </form>
+      </details>
+    {% endif %}
+
+    {% include "floor/_issues.html" with issues=issues %}
+  </section>
+</div>
+{% endblock %}

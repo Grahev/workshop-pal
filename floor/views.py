@@ -2,16 +2,19 @@ import re
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.core.exceptions import ValidationError
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_POST
 
+from accounts.permissions import can_manage
 from attachments.services import attachments_for
 from resources.models import WorkCentre
 from routing.models import HoldReason, Operation
 
 from . import selectors, services
+from .models import Issue
 from .services import InvalidTransition
 
 # Barcodes on job sheets encode an operation as OP-<id>.
@@ -80,6 +83,8 @@ def operation_detail(request, pk):
         "events": operation.events.select_related("user", "hold_reason").order_by("-occurred_at", "-id"),
         "waiting_on": list(operation.blocking_dependencies().values_list("name", flat=True)),
         "hold_reasons": HoldReason.objects.filter(is_active=True),
+        "issues": operation.issues.select_related("operation__item", "raised_by", "resolved_by"),
+        "issue_categories": Issue.Category.choices,
     }
     return render(request, "floor/operation.html", context)
 
@@ -99,6 +104,12 @@ def operation_action(request, pk, action):
         elif action == "hold":
             reason = HoldReason.objects.filter(pk=request.POST.get("hold_reason") or 0).first()
             services.hold_operation(operation, reason, user=request.user, work_centre=work_centre, note=note)
+        elif action == "rework":
+            # Sending finished work back is a supervisor decision.
+            if not can_manage(request.user):
+                error = "Only a supervisor can send work back for rework."
+            else:
+                services.rework_operation(operation, user=request.user, work_centre=work_centre, note=note)
         elif action == "note":
             if note:
                 services.add_note(operation, note, user=request.user, work_centre=work_centre)
@@ -116,4 +127,31 @@ def operation_action(request, pk, action):
     next_url = request.POST.get("next", "")
     if not url_has_allowed_host_and_scheme(next_url, allowed_hosts={request.get_host()}):
         next_url = reverse("floor:station", args=[work_centre.pk])
+    return redirect(next_url)
+
+
+@login_required
+@require_POST
+def raise_issue(request, pk):
+    """Raise an issue or NCR against an operation, with an optional photo from the device camera."""
+    operation = get_object_or_404(Operation, pk=pk)
+    work_centre = WorkCentre.objects.filter(pk=request.POST.get("station") or 0).first() or operation.work_centre
+    description = request.POST.get("description", "").strip()
+    category = request.POST.get("category") or Issue.Category.ISSUE
+    if not description:
+        messages.error(request, "Describe the issue.")
+    elif category not in Issue.Category.values:
+        messages.error(request, "Unknown issue type.")
+    else:
+        try:
+            services.raise_issue(
+                operation, description, user=request.user, category=category,
+                photo=request.FILES.get("photo"), work_centre=work_centre,
+            )
+            messages.success(request, "Issue raised.")
+        except ValidationError as exc:
+            messages.error(request, " ".join(exc.messages))
+    next_url = request.POST.get("next", "")
+    if not url_has_allowed_host_and_scheme(next_url, allowed_hosts={request.get_host()}):
+        next_url = f"{reverse('floor:operation', args=[operation.pk])}?station={work_centre.pk}"
     return redirect(next_url)
