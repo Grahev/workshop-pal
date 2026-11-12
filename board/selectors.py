@@ -6,6 +6,7 @@ from django.conf import settings
 from django.db.models import Prefetch, Q
 from django.utils import timezone
 
+from floor.selectors import annotate_readiness, queue_group
 from jobs.models import JobItem
 from resources.models import WorkCentre
 from routing.models import Operation
@@ -30,7 +31,7 @@ def _operations_prefetch():
     return Prefetch(
         "operations",
         queryset=Operation.objects.select_related("work_centre", "hold_reason")
-        .prefetch_related("depends_on")
+        .prefetch_related("dependencies__predecessor", "gates__gate_type")
         .order_by("sequence"),
     )
 
@@ -54,6 +55,12 @@ def build_row(item, today=None):
                 state = candidate
                 break
 
+    # With parallel routes an item can be in several places at once.
+    active = [op for op in open_operations if op.status != Status.PENDING]
+    gates_waiting = sorted({
+        gate.gate_type.name for op in open_operations for gate in op.gates.all() if not gate.is_cleared
+    })
+
     due = item.job.due_date
     finished = state == Status.COMPLETED
     days_left = (due - today).days if due else None
@@ -65,6 +72,9 @@ def build_row(item, today=None):
         job=item.job,
         operations=operations,
         current=current,
+        active=active,
+        also_active=[op for op in active if op is not current],
+        gates_waiting=gates_waiting,
         state=state,
         state_label=STATE_LABELS[state],
         done=done,
@@ -104,7 +114,10 @@ def board_rows(query="", customer_id=None, work_centre_id=None, status=""):
     today = timezone.localdate()
     rows = [build_row(item, today) for item in _items(query, customer_id)]
     if work_centre_id:
-        rows = [row for row in rows if row.current and row.current.work_centre_id == work_centre_id]
+        rows = [
+            row for row in rows
+            if any(op.work_centre_id == work_centre_id for op in row.active or filter(None, [row.current]))
+        ]
 
     active = [row for row in rows if row.state != Status.COMPLETED]
     summary = {
@@ -119,6 +132,8 @@ def board_rows(query="", customer_id=None, work_centre_id=None, status=""):
         rows = [row for row in active if row.is_late or row.at_risk or row.state == Status.ON_HOLD]
     elif status == "late":
         rows = [row for row in active if row.is_late]
+    elif status == "gate":
+        rows = [row for row in active if row.gates_waiting]
     elif status:
         rows = [row for row in rows if row.state == status]
     else:
@@ -138,23 +153,10 @@ def board_lanes(query="", customer_id=None, work_centre_id=None):
     }
 
     for item in _items(query, customer_id):
-        due = item.job.due_date
-        open_seen = []
         for op in item.operations.all():
-            if op.is_done:
-                continue
             lane = lanes.get(op.work_centre_id)
-            if lane is not None:
-                op.is_late = bool(due and due < today)
-                op.waiting_on = [dep.name for dep in op.depends_on.all() if not dep.is_done]
-                op.earlier_steps = list(open_seen)
-                if op.status in (Status.IN_PROGRESS, Status.PAUSED):
-                    lane.active.append(op)
-                elif op.status == Status.ON_HOLD:
-                    lane.on_hold.append(op)
-                elif op.waiting_on or op.earlier_steps:
-                    lane.upcoming.append(op)
-                else:
-                    lane.ready.append(op)
-            open_seen.append(op.name)
+            if op.is_done or lane is None:
+                continue
+            annotate_readiness(op, today)
+            getattr(lane, queue_group(op)).append(op)
     return list(lanes.values())

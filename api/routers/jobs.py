@@ -13,20 +13,28 @@ from ninja.pagination import LimitOffsetPagination, paginate
 from jobs import services as job_services
 from jobs.models import Job, JobItem
 from routing import services as routing_services
-from routing.models import Operation
+from routing.models import Dependency, Gate, Operation
 
-from .. import lookups, schemas
+from .. import lookups, queries, schemas
 from ..auth import require_manage
 
 router = Router(tags=["Jobs"])
 
 
-def _operation_kwargs(payload):
-    return {
+def _step(payload: schemas.OperationIn):
+    """An OperationIn as the step dict routing.services.add_steps takes."""
+    step = {
         "name": payload.name,
         "work_centre": lookups.work_centre(payload.work_centre_id, payload.work_centre),
         "estimated_minutes": payload.estimated_minutes,
+        "gate_types": [lookups.gate_type(name=name) for name in payload.needs],
     }
+    if payload.after is not None:
+        step["after"] = [
+            (ref.step, ref.type, ref.enforcement) if isinstance(ref, schemas.AfterIn) else (ref, None, None)
+            for ref in payload.after
+        ]
+    return step
 
 
 def _create_item(job, payload: schemas.ItemIn):
@@ -41,8 +49,9 @@ def _create_item(job, payload: schemas.ItemIn):
         quantity=payload.quantity,
         spec=payload.spec,
         route_template=lookups.route_template(payload.route_template_id) if payload.route_template_id else None,
-        operations=[_operation_kwargs(op) for op in payload.operations] if payload.operations else None,
+        operations=[_step(op) for op in payload.operations] if payload.operations else None,
         default_route=payload.apply_default_route,
+        link_enforcement=payload.link_enforcement,
     )
 
 
@@ -181,6 +190,8 @@ def update_item(request, item_id: int, payload: schemas.ItemPatch):
         item.quantity = changes["quantity"]
     if changes.get("product_type_id") or changes.get("product_type"):
         item.product_type = lookups.product_type(changes.get("product_type_id"), changes.get("product_type"))
+    if changes.get("link_enforcement"):
+        item.link_enforcement = changes["link_enforcement"]
     item.save()
     return item
 
@@ -207,7 +218,11 @@ def spec_history(request, item_id: int):
 # ---------------------------------------------------------------- routes
 
 def _operation(pk):
-    return get_object_or_404(Operation.objects.select_related("work_centre", "hold_reason", "item__job"), pk=pk)
+    return get_object_or_404(queries.operations(), pk=pk)
+
+
+def _route(item_id):
+    return queries.operations().filter(item_id=item_id).order_by("sequence", "id")
 
 
 @router.post("/items/{item_id}/route/apply-template", response=schemas.ItemOut, summary="Give an item its route from a template")
@@ -220,11 +235,12 @@ def apply_template(request, item_id: int, template_id: int):
     return item
 
 
-@router.post("/items/{item_id}/operations", response={201: schemas.OperationOut}, summary="Add a step to the end of an item's route")
+@router.post("/items/{item_id}/operations", response={201: schemas.OperationOut}, summary="Add a step to an item's route")
 def add_operation(request, item_id: int, payload: schemas.OperationIn):
+    """Without `after`, the step follows the route's current last step. `after: []` makes it free to start."""
     require_manage(request)
     item = get_object_or_404(JobItem, pk=item_id)
-    operation = routing_services.add_operation(item, **_operation_kwargs(payload))
+    operation = routing_services.add_steps(item, [_step(payload)])[0]
     return 201, _operation(operation.pk)
 
 
@@ -251,7 +267,7 @@ def move_operation(request, operation_id: int, payload: schemas.MoveIn):
     require_manage(request)
     operation = _operation(operation_id)
     routing_services.move_operation(operation, payload.direction)
-    return operation.item.operations.select_related("work_centre", "hold_reason", "item__job").order_by("sequence", "id")
+    return _route(operation.item_id)
 
 
 @router.delete("/operations/{operation_id}", response={204: None}, summary="Remove a step that has no history")
@@ -260,3 +276,113 @@ def remove_operation(request, operation_id: int):
     require_manage(request)
     routing_services.remove_operation(_operation(operation_id))
     return 204, None
+
+
+# ---------------------------------------------------------------- links
+
+@router.post("/items/{item_id}/route/sequence", response=list[schemas.OperationOut], summary="Re-link a route as a simple sequence")
+def set_sequence(request, item_id: int, payload: schemas.SequenceIn):
+    """Replaces every link with a plain chain in the current display order."""
+    require_manage(request)
+    item = get_object_or_404(JobItem, pk=item_id)
+    routing_services.set_simple_sequence(item, payload.enforcement)
+    return _route(item_id)
+
+
+@router.post("/items/{item_id}/route/save-template", response={201: schemas.RouteTemplateOut}, summary="Save an item's route as a template")
+def save_template(request, item_id: int, payload: schemas.SaveTemplateIn):
+    require_manage(request)
+    item = get_object_or_404(JobItem.objects.select_related("product_type"), pk=item_id)
+    return 201, routing_services.save_as_template(item, payload.name, product_type=item.product_type)
+
+
+@router.post("/operations/{operation_id}/links", response=schemas.OperationOut, summary="Make a step come after another")
+def add_link(request, operation_id: int, payload: schemas.LinkIn):
+    """Creates the link, or updates it if the two steps are already linked.
+
+    `finish_to_start`: the earlier step must finish before this one starts.
+    `finish_to_finish`: this one can start, but cannot be completed until the earlier step finishes.
+    `strict` blocks; `advisory` only warns. Loops are refused, and a started step cannot be made stricter.
+    """
+    require_manage(request)
+    operation = get_object_or_404(Operation.objects.select_related("item"), pk=operation_id)
+    predecessor = get_object_or_404(Operation, pk=payload.after)
+    routing_services.add_link(operation, predecessor, kind=payload.type, enforcement=payload.enforcement)
+    return _operation(operation_id)
+
+
+def _link(operation_id, after_id):
+    return get_object_or_404(
+        Dependency.objects.select_related("operation", "predecessor"), operation_id=operation_id, predecessor_id=after_id
+    )
+
+
+@router.patch("/operations/{operation_id}/links/{after_id}", response=schemas.OperationOut, summary="Change a link's type or enforcement")
+def update_link(request, operation_id: int, after_id: int, payload: schemas.LinkPatch):
+    require_manage(request)
+    routing_services.update_link(_link(operation_id, after_id), kind=payload.type, enforcement=payload.enforcement)
+    return _operation(operation_id)
+
+
+@router.delete("/operations/{operation_id}/links/{after_id}", response=schemas.OperationOut, summary="Remove a link")
+def remove_link(request, operation_id: int, after_id: int):
+    require_manage(request)
+    routing_services.remove_link(_link(operation_id, after_id))
+    return _operation(operation_id)
+
+
+# ---------------------------------------------------------------- gates
+
+@router.get("/gates", response=list[schemas.GateOut], summary="List gates")
+def list_gates(request, cleared: Optional[bool] = None, job_id: Optional[int] = None, item_id: Optional[int] = None,
+               gate_type: Optional[str] = None):
+    """For example `?cleared=false&gate_type=Hardware` lists everything still waiting on hardware."""
+    gates = queries.gates().filter(item__job__is_archived=False).order_by("id")
+    if cleared is not None:
+        gates = gates.filter(is_cleared=cleared)
+    if job_id:
+        gates = gates.filter(item__job_id=job_id)
+    if item_id:
+        gates = gates.filter(item_id=item_id)
+    if gate_type:
+        gates = gates.filter(gate_type__name__iexact=gate_type)
+    return gates
+
+
+@router.post("/operations/{operation_id}/gates", response=schemas.OperationOut, summary="Make a step need a gate")
+def require_gate(request, operation_id: int, payload: schemas.GateIn):
+    """The step cannot start until the gate is cleared. The gate is created on the item if needed."""
+    require_manage(request)
+    operation = get_object_or_404(Operation.objects.select_related("item"), pk=operation_id)
+    routing_services.require_gate(operation, lookups.gate_type(payload.gate_type_id, payload.gate_type))
+    return _operation(operation_id)
+
+
+@router.delete("/operations/{operation_id}/gates/{gate_id}", response=schemas.OperationOut, summary="Stop a step needing a gate")
+def drop_gate(request, operation_id: int, gate_id: int):
+    require_manage(request)
+    operation = get_object_or_404(Operation, pk=operation_id)
+    routing_services.drop_gate_requirement(operation, get_object_or_404(Gate, pk=gate_id, item_id=operation.item_id))
+    return _operation(operation_id)
+
+
+@router.post("/gates/{gate_id}/clear", response=schemas.GateOut, summary="Mark a gate as available")
+def clear_gate(request, gate_id: int, payload: schemas.GateNoteIn):
+    """For example when hardware arrives. Steps waiting on it can then start."""
+    require_manage(request)
+    routing_services.clear_gate(get_object_or_404(Gate, pk=gate_id), user=request.user, note=payload.note.strip())
+    return queries.gates().get(pk=gate_id)
+
+
+@router.post("/gates/{gate_id}/reopen", response=schemas.GateOut, summary="Mark a gate as waiting again")
+def reopen_gate(request, gate_id: int, payload: schemas.GateNoteIn):
+    require_manage(request)
+    routing_services.reopen_gate(get_object_or_404(Gate, pk=gate_id), user=request.user, note=payload.note.strip())
+    return queries.gates().get(pk=gate_id)
+
+
+@router.patch("/gates/{gate_id}", response=schemas.GateOut, summary="Set when a gate is expected to clear")
+def update_gate(request, gate_id: int, payload: schemas.GatePatch):
+    require_manage(request)
+    routing_services.set_gate_expected(get_object_or_404(Gate, pk=gate_id), payload.expected_date)
+    return queries.gates().get(pk=gate_id)

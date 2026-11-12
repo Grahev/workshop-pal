@@ -65,7 +65,6 @@ class TransitionTests(FloorTestCase):
         self.assertEqual(self.op_cut.status, Status.PENDING)
 
     def test_cannot_start_until_dependencies_done(self):
-        self.op_weld.depends_on.add(self.op_cut)
         with self.assertRaises(InvalidTransition):
             services.start_operation(self.op_weld, user=self.user)
 
@@ -76,7 +75,6 @@ class TransitionTests(FloorTestCase):
         self.assertEqual(self.op_weld.status, Status.IN_PROGRESS)
 
     def test_skipped_dependency_does_not_block(self):
-        self.op_weld.depends_on.add(self.op_cut)
         services.skip_operation(self.op_cut, user=self.user)
         services.start_operation(self.op_weld, user=self.user)
         self.op_weld.refresh_from_db()
@@ -153,8 +151,8 @@ class WorkstationViewTests(FloorTestCase):
         response = self.client.get(f"/floor/station/{self.weld.pk}/")
         upcoming = response.context["queue"]["upcoming"]
         self.assertEqual([op.name for op in upcoming], ["Weld"])
-        self.assertEqual(upcoming[0].earlier_steps, ["Cut"])
-        self.assertContains(response, "Earlier steps not finished: Cut")
+        self.assertEqual(upcoming[0].waiting_on, ["Cut"])
+        self.assertContains(response, "Cannot start until done: Cut")
 
     def test_htmx_start_returns_queue_fragment_and_records_event(self):
         response = self.client.post(
@@ -186,7 +184,6 @@ class WorkstationViewTests(FloorTestCase):
         self.assertEqual(self.op_cut.events.get().note, "Plate late")
 
     def test_hard_dependency_disables_start(self):
-        self.op_weld.depends_on.add(self.op_cut)
         response = self.client.get(f"/floor/station/{self.weld.pk}/")
         self.assertContains(response, "Cannot start until done: Cut")
 

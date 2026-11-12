@@ -1,20 +1,94 @@
 {% extends "base.html" %}
-{% block title %}Edit step · Workshop Pal{% endblock %}
+{% block title %}{{ operation.name }} · route step · Workshop Pal{% endblock %}
 
 {% block content %}
 <section class="narrow-form">
   <p class="crumbs">
     <a href="{% url 'jobs:detail' operation.item.job.pk %}">{{ operation.item.job.reference }}</a> ›
-    <a href="{% url 'jobs:item' operation.item.pk %}">{{ operation.item.name }}</a>
+    <a href="{% url 'jobs:item' operation.item.pk %}#route">{{ operation.item.name }}</a>
   </p>
-  <h1>Edit step</h1>
-  <form method="post" class="form">
-    {% csrf_token %}
-    {{ form.as_div }}
-    <div class="form-actions">
-      <button type="submit" class="btn btn-primary">Save step</button>
-      <a class="btn btn-quiet" href="{% url 'jobs:item' operation.item.pk %}#route">Cancel</a>
-    </div>
-  </form>
+  <div class="page-head">
+    <h1>{{ operation.name }}</h1>
+    <span class="badge badge-{{ operation.status }}">{{ operation.get_status_display }}</span>
+  </div>
+
+  <h2>Comes after</h2>
+  <p class="meta">A step with nothing here can start straight away. Several steps can come after the same one, which is how work runs in parallel.</p>
+  {% if links %}
+    <ul class="issues">
+      {% for link in links %}
+        <li>
+          <strong>{{ link.predecessor.name }}</strong>
+          <span class="badge badge-{{ link.predecessor.status }}">{{ link.predecessor.get_status_display }}</span>
+          <form method="post" action="{% url 'jobs:link_update' link.pk %}" class="inline-form">
+            {% csrf_token %}
+            <select name="kind" aria-label="Link type">
+              {% for value, label in kinds %}<option value="{{ value }}" {% if value == link.kind %}selected{% endif %}>{{ label }}</option>{% endfor %}
+            </select>
+            <select name="enforcement" aria-label="Enforcement">
+              {% for value, label in enforcements %}<option value="{{ value }}" {% if value == link.enforcement %}selected{% endif %}>{{ label }}</option>{% endfor %}
+            </select>
+            <button class="btn btn-small">Save</button>
+          </form>
+          <form method="post" action="{% url 'jobs:link_remove' link.pk %}">
+            {% csrf_token %}
+            <button class="btn btn-small btn-quiet">Remove link</button>
+          </form>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="empty">Nothing. This step can start straight away.</p>
+  {% endif %}
+
+  {% if candidates %}
+    <form method="post" action="{% url 'jobs:link_add' operation.pk %}" class="form panel">
+      {% csrf_token %}
+      <div><label for="id_predecessor">Add: this step comes after</label>
+        <select id="id_predecessor" name="predecessor" required>
+          <option value="">Choose a step…</option>
+          {% for candidate in candidates %}<option value="{{ candidate.pk }}">{{ candidate.name }}</option>{% endfor %}
+        </select></div>
+      <div><label for="id_kind">Type</label>
+        <select id="id_kind" name="kind">
+          {% for value, label in kinds %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+        </select></div>
+      <div><label for="id_enforcement">Enforcement</label>
+        <select id="id_enforcement" name="enforcement">
+          {% for value, label in enforcements %}<option value="{{ value }}" {% if value == default_enforcement %}selected{% endif %}>{{ label }}</option>{% endfor %}
+        </select></div>
+      <div class="form-actions"><button type="submit" class="btn btn-primary">Add link</button></div>
+    </form>
+  {% endif %}
+
+  <h2>Needs</h2>
+  <p class="meta">Conditions that are not work steps. The step cannot start until each one is marked available on the item.</p>
+  {% if gate_types %}
+    <form method="post" action="{% url 'jobs:operation_gates' operation.pk %}" class="form panel">
+      {% csrf_token %}
+      <fieldset class="checks">
+        <legend class="visually-hidden">Needs</legend>
+        {% for gate_type in gate_types %}
+          <label><input type="checkbox" name="needs" value="{{ gate_type.pk }}" {% if gate_type.pk in needed %}checked{% endif %}> {{ gate_type.name }}</label>
+        {% endfor %}
+      </fieldset>
+      <div class="form-actions"><button type="submit" class="btn btn-primary">Save requirements</button></div>
+    </form>
+  {% else %}
+    <p class="empty">No gate types set up yet. Add them in Setup → Gate types (for example Hardware, Material, Drawing approval).</p>
+  {% endif %}
+
+  <h2>Step details</h2>
+  {% if operation.status == "pending" %}
+    <form method="post" class="form panel">
+      {% csrf_token %}
+      {{ form.as_div }}
+      <div class="form-actions"><button type="submit" class="btn btn-primary">Save step</button></div>
+    </form>
+  {% else %}
+    <p class="empty">{{ operation.work_centre.name }}{% if operation.estimated_minutes %} · {{ operation.estimated_minutes }} min{% endif %}. Details cannot be changed once a step has started.</p>
+  {% endif %}
+
+  <p><a class="btn" href="{% url 'jobs:item' operation.item.pk %}#route">Back to route</a></p>
 </section>
 {% endblock %}

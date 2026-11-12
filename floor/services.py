@@ -49,9 +49,15 @@ def record_event(operation, event_type, user=None, work_centre=None, note="", ho
                 f"Cannot {event_type} an operation that is {operation.get_status_display().lower()}."
             )
         if event_type == Type.START:
-            blocking = list(operation.blocking_dependencies().values_list("name", flat=True))
-            if blocking:
-                raise InvalidTransition(f"Waiting on: {', '.join(blocking)}.")
+            readiness = operation.readiness()
+            if readiness.start_blockers:
+                raise InvalidTransition(f"Cannot start until done: {', '.join(readiness.start_blockers)}.")
+            if readiness.gate_blockers:
+                raise InvalidTransition(f"Cannot start yet. Waiting for: {', '.join(readiness.gate_blockers)}.")
+        if event_type == Type.COMPLETE:
+            readiness = operation.readiness()
+            if readiness.finish_blockers:
+                raise InvalidTransition(f"Cannot complete until done: {', '.join(readiness.finish_blockers)}.")
         if event_type == Type.HOLD and hold_reason is None:
             raise InvalidTransition("A hold needs a reason.")
 

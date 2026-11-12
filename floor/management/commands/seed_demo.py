@@ -7,7 +7,8 @@ from django.utils import timezone
 from floor import services
 from jobs.models import Customer, Job, JobItem, ProductType
 from resources.models import Site, WorkCentre
-from routing.models import HoldReason, RouteTemplate, RouteTemplateStep
+from routing import services as routing
+from routing.models import GateType, HoldReason, LinkKind, RouteTemplate, RouteTemplateStep
 from routing.services import apply_template
 
 
@@ -82,4 +83,42 @@ class Command(BaseCommand):
 
         services.hold_operation(items[2].operations.get(name="Cut"), reasons["Waiting on material"], note="Plate due Thursday")
 
-        self.stdout.write(self.style.SUCCESS("Demo data created: 5 work centres, 3 jobs."))
+        # A branching route with a gate: program, cut, fold, then glue and build in
+        # parallel; build can start on the other parts but cannot finish before glue,
+        # and cannot start at all until the hardware is in.
+        hardware = GateType.objects.create(name="Hardware")
+        for name in ["Material", "Drawing approval"]:
+            GateType.objects.create(name=name)
+        panel = ProductType.objects.create(
+            name="Folded panel",
+            spec_fields=[
+                {"key": "width_mm", "label": "Width (mm)", "type": "number"},
+                {"key": "height_mm", "label": "Height (mm)", "type": "number"},
+                {"key": "finish", "label": "Finish", "type": "choice", "choices": ["Raw", "Galvanised", "Powder coat"]},
+            ],
+        )
+        customer, _ = Customer.objects.get_or_create(name="Riverside Homes")
+        job = Job.objects.create(
+            reference="J-1004", customer=customer, site=site, title="Cladding panels",
+            due_date=today + timedelta(days=10), priority=Job.Priority.NORMAL,
+        )
+        item = JobItem.objects.create(
+            job=job, product_type=panel, name="Cladding panel set", quantity=12,
+            spec={"width_mm": 1200, "height_mm": 2400, "finish": "Powder coat"},
+        )
+        routing.add_steps(item, [
+            {"name": "Program", "work_centre": centres["CUT"], "estimated_minutes": 30, "after": []},
+            {"name": "Cut", "work_centre": centres["CUT"], "estimated_minutes": 60},
+            {"name": "Fold", "work_centre": centres["WLD"], "estimated_minutes": 45},
+            {"name": "Glue", "work_centre": centres["FIN"], "estimated_minutes": 40, "after": [("Fold", None, None)]},
+            {"name": "Build", "work_centre": centres["ASM"], "estimated_minutes": 90, "gate_types": [hardware],
+             "after": [("Fold", None, None), ("Glue", LinkKind.FINISH_TO_FINISH, None)]},
+            {"name": "Inspect", "work_centre": centres["QC"], "estimated_minutes": 20},
+        ])
+        routing.save_as_template(item, "Folded panel (parallel)", product_type=panel)
+        for name in ("Program", "Cut"):
+            operation = item.operations.get(name=name)
+            services.start_operation(operation)
+            services.complete_operation(operation)
+
+        self.stdout.write(self.style.SUCCESS("Demo data created: 5 work centres, 4 jobs, 1 branching route with a gate."))

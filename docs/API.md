@@ -67,9 +67,38 @@ curl -X POST https://your-host/api/v1/jobs \
 
 **Where an item's route comes from**, in order:
 
-1. `operations`: an explicit list, e.g. `[{"name": "Laser cut", "work_centre": "CUT", "estimated_minutes": 30}]`
+1. `operations`: an explicit list (see below)
 2. `route_template_id`
 3. The product type's active template (turn off with `"apply_default_route": false`)
+
+### Routes with parallel steps and gates
+
+A route is a network. Each step says which steps it comes `after`, and which gates it `needs`.
+
+```json
+"operations": [
+  {"name": "Program", "work_centre": "CUT", "after": []},
+  {"name": "Cut", "work_centre": "CUT"},
+  {"name": "Fold", "work_centre": "FLD"},
+  {"name": "Glue", "work_centre": "GLU", "after": ["Fold"]},
+  {"name": "Build", "work_centre": "ASM", "needs": ["Hardware"],
+   "after": ["Fold", {"step": "Glue", "type": "finish_to_finish"}]},
+  {"name": "Inspect", "work_centre": "QC"}
+]
+```
+
+- No `after`: the step follows the one before it, so a plain list is a simple sequence.
+- `"after": []`: the step can start straight away.
+- `"after": ["Fold"]`: by step name. Two steps after the same one run in parallel; a step after
+  several waits for all of them.
+- An object sets the link type and enforcement: `type` is `finish_to_start` (default) or
+  `finish_to_finish` (can start, cannot complete until the other finishes); `enforcement` is
+  `strict` (blocks) or `advisory` (warns). The default enforcement is the item's
+  `link_enforcement`, which is `strict` unless you send otherwise.
+- `needs` lists gate types by name. The step cannot start until that gate is cleared.
+
+Every operation in a response shows `after`, `needs`, `can_start`, and what it is waiting for:
+`waiting_on` (strict earlier steps), `waiting_gates`, `finish_waiting`, and `earlier_steps` (advisory).
 
 ## 3. Change jobs, items and routes
 
@@ -84,9 +113,15 @@ curl -X POST https://your-host/api/v1/jobs \
 | `PUT /items/{id}/spec` | Replace the spec; the old version is kept |
 | `GET /items/{id}/spec-history` | Earlier spec versions |
 | `POST /items/{id}/route/apply-template?template_id=` | Route from a template (only if the item has none) |
-| `POST /items/{id}/operations` | Add a step at the end |
+| `POST /items/{id}/operations` | Add a step; follows the last step unless `after` says otherwise |
+| `POST /operations/{id}/links` | `{"after": <operation id>, "type": ..., "enforcement": ...}` make a step come after another |
+| `PATCH`, `DELETE /operations/{id}/links/{after_id}` | Change or remove a link |
+| `POST /operations/{id}/gates` | `{"gate_type": "Hardware"}` make a step need a gate |
+| `DELETE /operations/{id}/gates/{gate_id}` | Stop a step needing a gate |
+| `POST /items/{id}/route/sequence` | Re-link the whole route as a simple sequence |
+| `POST /items/{id}/route/save-template` | `{"name": "..."}` save the route as a template |
 | `PATCH /operations/{id}` | Change a step that has not started |
-| `POST /operations/{id}/move` | `{"direction": "up"}` or `"down"` |
+| `POST /operations/{id}/move` | `{"direction": "up"}` or `"down"`; display order only |
 | `DELETE /operations/{id}` | Remove a step with no history; otherwise record a `skip` event |
 
 ## 4. Record what happens on the floor
@@ -101,10 +136,10 @@ curl -X POST https://your-host/api/v1/operations/16/events \
 
 | `type` | Allowed when | Notes |
 |---|---|---|
-| `start` | pending | Blocked while a hard dependency is unfinished |
+| `start` | pending | Blocked while a strict earlier step is unfinished or a gate is not cleared |
 | `pause` | in progress | |
 | `resume` | paused | |
-| `complete` | in progress or paused | |
+| `complete` | in progress or paused | Blocked while a strict `finish_to_finish` step is unfinished |
 | `hold` | pending, in progress, paused | Needs `hold_reason_id` or `hold_reason` (name) |
 | `release` | on hold | Work that was running comes back paused |
 | `rework` | completed | Office roles only |
@@ -130,6 +165,25 @@ to a successful event contains the event and the operation's new state.
 
 **Keeping another system in sync:** poll `GET /events?after_id=<last id you saw>` (up to 500 per call
 with `limit`). Each event carries the job, item and operation it belongs to. Filter with `job_id` or `type`.
+
+## 5a. Gates
+
+A gate is a condition on an item that is not a work step, such as hardware being available.
+
+```bash
+# everything still waiting on hardware
+curl "https://your-host/api/v1/gates?cleared=false&gate_type=Hardware" -H "Authorization: Bearer $KEY"
+
+# the hardware has arrived
+curl -X POST https://your-host/api/v1/gates/12/clear \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"note": "Delivered, bay 3"}'
+```
+
+- `GET /gates` filters: `cleared`, `gate_type`, `job_id`, `item_id`. Each gate lists the operations it is `needed_by`.
+- `POST /gates/{id}/clear` and `/reopen`; `PATCH /gates/{id}` with `{"expected_date": "2026-12-01"}`.
+- `GET /board/items?status=gate` lists items waiting on a gate.
+- A stock or purchasing system can clear gates as goods arrive, which releases the waiting steps.
 
 ## 6. Issues and NCRs
 
@@ -159,7 +213,7 @@ curl -X POST https://your-host/api/v1/attachments \
 
 ## 8. Reference data
 
-`GET /sites`, `/work-centres`, `/product-types`, `/route-templates`, `/hold-reasons`, `/customers`.
+`GET /sites`, `/work-centres`, `/product-types`, `/route-templates`, `/hold-reasons`, `/gate-types`, `/customers`.
 `POST /customers` with `{"name": "..."}` creates a customer, or returns the existing one with that name.
 
 These are set up in the app under Setup; the API reads them so you can map your system's values.
@@ -173,7 +227,7 @@ All errors are `{"detail": "..."}`.
 | 401 | Missing, wrong or deactivated key |
 | 403 | The key's user role cannot do this |
 | 404 | No such record |
-| 409 | Not allowed in the current state (duplicate reference, invalid status move, step has history) |
+| 409 | Not allowed in the current state (duplicate reference, invalid status move, step has history, link would make a loop, tightening a started step) |
 | 422 | Invalid data; the message says which field |
 
 Lists that can grow (`/jobs`, `/operations`, `/issues`) return `{"items": [...], "count": n}` and accept

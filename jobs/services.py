@@ -112,23 +112,25 @@ def validate_spec(product_type, spec: dict) -> list[str]:
 
 @transaction.atomic
 def create_item(job, name, product_type=None, quantity=1, spec=None, route_template=None,
-                operations=None, default_route=True) -> JobItem:
+                operations=None, default_route=True, link_enforcement=None) -> JobItem:
     """Create an item and its route in one step.
 
-    Route, in order of preference: explicit `operations` (dicts with name,
-    work_centre, estimated_minutes), then `route_template`, then the product
-    type's active template when `default_route` is true.
+    Route, in order of preference: explicit `operations` (step dicts as taken by
+    routing.services.add_steps), then `route_template`, then the product type's
+    active template when `default_route` is true.
     """
-    item = JobItem.objects.create(
-        job=job, name=name, product_type=product_type, quantity=quantity, spec=spec or {}
-    )
+    item = JobItem(job=job, name=name, product_type=product_type, quantity=quantity, spec=spec or {})
+    if link_enforcement:
+        item.link_enforcement = link_enforcement
+    item.save()
     if operations:
-        for operation in operations:
-            routing_services.add_operation(item, **operation)
+        routing_services.add_steps(item, operations)
     elif route_template:
         routing_services.apply_template(item, route_template)
     elif default_route and product_type:
         template = RouteTemplate.objects.filter(product_type=product_type, is_active=True).first()
         if template:
             routing_services.apply_template(item, template)
+    if link_enforcement and item.link_enforcement != link_enforcement:
+        routing_services.set_default_enforcement(item, link_enforcement)
     return item

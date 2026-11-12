@@ -9,7 +9,7 @@ from attachments.models import Attachment
 from floor.models import Event, Issue
 from jobs.models import Customer, Job, JobItem, ProductType
 from resources.models import Site, WorkCentre
-from routing.models import HoldReason, Operation, RouteTemplate, RouteTemplateStep
+from routing.models import GateType, HoldReason, Operation, RouteTemplate, RouteTemplateStep
 
 from .models import ApiKey
 
@@ -271,7 +271,8 @@ class FloorTests(ApiTestCase):
         self.assertEqual(self.call("get", "/operations?status=pending").json()["count"], 2)
         queue = self.call("get", f"/work-centres/{self.weld.pk}/queue").json()
         self.assertEqual([op["name"] for op in queue["upcoming"]], ["Weld"])
-        self.assertEqual(queue["upcoming"][0]["earlier_steps"], ["Cut"])
+        self.assertEqual(queue["upcoming"][0]["waiting_on"], ["Cut"])
+        self.assertFalse(queue["upcoming"][0]["can_start"])
         queue = self.call("get", f"/work-centres/{self.cut.pk}/queue").json()
         self.assertEqual([op["name"] for op in queue["ready"]], ["Cut"])
 
@@ -285,6 +286,141 @@ class FloorTests(ApiTestCase):
         self.assertEqual((resolved["is_open"], resolved["resolution"], resolved["resolved_by"]), (False, "Recut", "erp"))
         self.assertEqual(self.call("get", "/issues?open=true").json()["count"], 0)
         self.assertEqual(Issue.objects.get().raised_by, self.operator)
+
+
+class ParallelRouteApiTests(ApiTestCase):
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        GateType.objects.create(name="Hardware")
+
+    def make_branching_job(self):
+        job = self.make_job(items=[{
+            "name": "Folded panel",
+            "operations": [
+                {"name": "Program", "work_centre": "CUT", "after": []},
+                {"name": "Cut", "work_centre": "CUT"},
+                {"name": "Fold", "work_centre": "WLD"},
+                {"name": "Glue", "work_centre": "WLD", "after": ["Fold"]},
+                {"name": "Build", "work_centre": "WLD", "needs": ["Hardware"],
+                 "after": ["Fold", {"step": "Glue", "type": "finish_to_finish"}]},
+                {"name": "Finish", "work_centre": "CUT"},
+            ],
+        }])
+        item = job["items"][0]
+        return item, {op["name"]: op for op in item["operations"]}
+
+    def event(self, operation, type_):
+        return self.call("post", f"/operations/{operation['id']}/events", {"type": type_})
+
+    def do(self, operation):
+        self.assertEqual(self.event(operation, "start").status_code, 201)
+        self.assertEqual(self.event(operation, "complete").status_code, 201)
+
+    def test_branching_route_created_in_one_call(self):
+        item, ops = self.make_branching_job()
+        self.assertEqual(ops["Program"]["after"], [])
+        self.assertTrue(ops["Program"]["can_start"])
+        self.assertEqual([link["name"] for link in ops["Cut"]["after"]], ["Program"])
+        self.assertEqual([(l["name"], l["type"], l["enforcement"]) for l in ops["Build"]["after"]],
+                         [("Fold", "finish_to_start", "strict"), ("Glue", "finish_to_finish", "strict")])
+        self.assertEqual([(n["name"], n["is_cleared"]) for n in ops["Build"]["needs"]], [("Hardware", False)])
+        self.assertEqual((ops["Build"]["waiting_on"], ops["Build"]["waiting_gates"], ops["Build"]["finish_waiting"]),
+                         (["Fold"], ["Hardware"], ["Glue"]))
+        self.assertEqual([(g["name"], g["needed_by"]) for g in item["gates"]], [("Hardware", [ops["Build"]["id"]])])
+
+    def test_gate_holds_build_until_cleared_through_the_api(self):
+        item, ops = self.make_branching_job()
+        for name in ("Program", "Cut", "Fold"):
+            self.do(ops[name])
+        self.assertEqual(self.event(ops["Glue"], "start").status_code, 201)
+
+        blocked = self.event(ops["Build"], "start")
+        self.assertEqual(blocked.status_code, 409)
+        self.assertIn("Waiting for: Hardware", blocked.json()["detail"])
+        self.assertEqual(self.call("get", "/board/items?status=gate").json()["items"][0]["gates_waiting"], ["Hardware"])
+
+        waiting = self.call("get", "/gates?cleared=false&gate_type=hardware").json()
+        self.assertEqual(len(waiting), 1)
+        gate_id = waiting[0]["id"]
+        self.assertEqual(self.call("post", f"/gates/{gate_id}/clear", {"note": "x"}, key=self.operator_key).status_code, 403)
+        self.assertEqual(self.call("patch", f"/gates/{gate_id}", {"expected_date": "2026-12-01"}).json()["expected_date"], "2026-12-01")
+        cleared = self.call("post", f"/gates/{gate_id}/clear", {"note": "Delivered"}).json()
+        self.assertEqual((cleared["is_cleared"], cleared["cleared_by"]), (True, "erp"))
+
+        self.assertEqual(self.event(ops["Build"], "start").status_code, 201)
+        early = self.event(ops["Build"], "complete")
+        self.assertEqual(early.status_code, 409)
+        self.assertIn("Cannot complete until done: Glue", early.json()["detail"])
+        self.event(ops["Glue"], "complete")
+        self.assertEqual(self.event(ops["Build"], "complete").status_code, 201)
+
+        row = self.call("get", "/board/items").json()["items"][0]
+        self.assertEqual(row["gates_waiting"], [])
+
+    def test_two_steps_active_at_once_show_on_the_board(self):
+        _, ops = self.make_branching_job()
+        gate_id = self.call("get", "/gates").json()[0]["id"]
+        self.call("post", f"/gates/{gate_id}/clear", {})
+        for name in ("Program", "Cut", "Fold"):
+            self.do(ops[name])
+        self.event(ops["Glue"], "start")
+        self.event(ops["Build"], "start")
+        row = self.call("get", "/board/items").json()["items"][0]
+        self.assertEqual(sorted(op["name"] for op in row["active_operations"]), ["Build", "Glue"])
+
+    def test_link_endpoints_and_rules(self):
+        _, ops = self.make_branching_job()
+        finish, program, build = ops["Finish"]["id"], ops["Program"]["id"], ops["Build"]["id"]
+
+        added = self.call("post", f"/operations/{finish}/links", {"after": program, "enforcement": "advisory"}).json()
+        self.assertIn(("Program", "advisory"), [(l["name"], l["enforcement"]) for l in added["after"]])
+        patched = self.call("patch", f"/operations/{finish}/links/{program}", {"type": "finish_to_finish"}).json()
+        self.assertIn(("Program", "finish_to_finish"), [(l["name"], l["type"]) for l in patched["after"]])
+        removed = self.call("delete", f"/operations/{finish}/links/{program}").json()
+        self.assertEqual([l["name"] for l in removed["after"]], ["Build"])
+
+        loop = self.call("post", f"/operations/{program}/links", {"after": build})
+        self.assertEqual(loop.status_code, 409)
+        self.assertIn("loop", loop.json()["detail"])
+        self.assertEqual(self.call("delete", f"/operations/{finish}/links/{program}").status_code, 404)
+        self.assertEqual(self.call("post", f"/operations/{finish}/links", {"after": program}, key=self.operator_key).status_code, 403)
+
+    def test_gate_requirement_endpoints_sequence_and_template(self):
+        item, ops = self.make_branching_job()
+        cut = ops["Cut"]["id"]
+        needs = self.call("post", f"/operations/{cut}/gates", {"gate_type": "hardware"}).json()["needs"]
+        self.assertEqual([n["name"] for n in needs], ["Hardware"])
+        self.assertEqual(self.call("delete", f"/operations/{cut}/gates/{needs[0]['gate_id']}").json()["needs"], [])
+        self.assertEqual(self.call("post", f"/operations/{cut}/gates", {"gate_type": "Unobtainium"}).status_code, 422)
+
+        template = self.call("post", f"/items/{item['id']}/route/save-template", {"name": "Folded panel"})
+        self.assertEqual(template.status_code, 201)
+        self.assertEqual((template.json()["simple_sequence"], len(template.json()["links"])), (False, 6))
+        self.assertEqual(template.json()["steps"][4]["needs"], ["Hardware"])
+
+        chain = self.call("post", f"/items/{item['id']}/route/sequence", {"enforcement": "advisory"}).json()
+        self.assertEqual([[l["name"] for l in op["after"]] for op in chain],
+                         [[], ["Program"], ["Cut"], ["Fold"], ["Glue"], ["Build"]])
+        self.assertEqual(self.call("patch", f"/items/{item['id']}", {"link_enforcement": "advisory"}).json()["link_enforcement"], "advisory")
+
+    def test_bad_step_reference_saves_nothing(self):
+        response = self.call("post", "/jobs", {"reference": "J-7", "title": "Bad", "customer": "Acme", "items": [{
+            "name": "X", "operations": [{"name": "A", "work_centre": "CUT", "after": ["Missing"]}],
+        }]})
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("not an earlier step", response.json()["detail"])
+        self.assertFalse(Job.objects.filter(reference="J-7").exists())
+
+    def test_added_step_follows_the_last_one_unless_told_otherwise(self):
+        item, ops = self.make_branching_job()
+        default = self.call("post", f"/items/{item['id']}/operations", {"name": "Pack", "work_centre": "CUT"}).json()
+        self.assertEqual([l["name"] for l in default["after"]], ["Finish"])
+        free = self.call("post", f"/items/{item['id']}/operations", {"name": "Label", "work_centre": "CUT", "after": []}).json()
+        self.assertEqual((free["after"], free["can_start"]), ([], True))
+        by_id = self.call("post", f"/items/{item['id']}/operations",
+                          {"name": "Wrap", "work_centre": "CUT", "after": [ops["Glue"]["id"], "Pack"]}).json()
+        self.assertEqual(sorted(l["name"] for l in by_id["after"]), ["Glue", "Pack"])
 
 
 class BoardTests(ApiTestCase):

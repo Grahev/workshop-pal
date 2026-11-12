@@ -15,6 +15,7 @@ STATUS_CHOICES = [
     ("on_hold", "On hold"),
     ("pending", "Waiting"),
     ("late", "Late"),
+    ("gate", "Waiting on a gate"),
     ("no_route", "No route"),
     ("completed", "Completed"),
 ]

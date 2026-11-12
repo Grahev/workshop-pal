@@ -4,7 +4,7 @@ from ninja import Router
 
 from jobs.models import Customer, ProductType
 from resources.models import Site, WorkCentre
-from routing.models import HoldReason, RouteTemplate
+from routing.models import GateType, HoldReason, RouteTemplate
 
 from .. import schemas
 from ..auth import require_manage
@@ -30,12 +30,17 @@ def list_product_types(request):
 
 @router.get("/route-templates", response=list[schemas.RouteTemplateOut], summary="List route templates")
 def list_route_templates(request):
-    return RouteTemplate.objects.prefetch_related("steps")
+    return RouteTemplate.objects.prefetch_related("steps__gate_types", "links")
 
 
 @router.get("/hold-reasons", response=list[schemas.HoldReasonOut], summary="List hold reasons")
 def list_hold_reasons(request):
     return HoldReason.objects.all()
+
+
+@router.get("/gate-types", response=list[schemas.GateTypeOut], summary="List gate types")
+def list_gate_types(request):
+    return GateType.objects.all()
 
 
 @router.get("/customers", response=list[schemas.CustomerOut], summary="List customers")

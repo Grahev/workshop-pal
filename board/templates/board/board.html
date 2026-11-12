@@ -77,7 +77,10 @@
               <div class="row-name">{{ row.current.name }}</div>
               <div class="meta">{{ row.current.work_centre.name }}</div>
               {% if row.held_since %}<div class="note note-hold">{{ row.current.hold_reason }} · {{ row.held_since|timesince }}</div>{% endif %}
-            {% elif row.state == "no_route" %}
+              {% for op in row.also_active %}<div class="meta">Also: {{ op.name }} · {{ op.work_centre.name }} ({{ op.get_status_display|lower }})</div>{% endfor %}
+            {% endif %}
+            {% if row.gates_waiting %}<div class="note note-hold">Waiting for: {{ row.gates_waiting|join:", " }}</div>{% endif %}
+            {% if row.state == "no_route" %}
               <div class="meta">Needs a route before work can start</div>
             {% endif %}
           </div>
@@ -102,8 +105,11 @@
   {% if op.is_late %}<span class="badge badge-late">Late</span>{% endif %}
   <div class="row-name">{{ op.name }} · {{ op.item.name }}</div>
   {% if op.status == "on_hold" %}<div class="note note-hold">{{ op.hold_reason }} · {{ op.status_changed_at|timesince }}</div>
-  {% elif op.waiting_on %}<div class="meta">Blocked by {{ op.waiting_on|join:", " }}</div>
-  {% elif op.earlier_steps and op.status == "pending" %}<div class="meta">After {{ op.earlier_steps|last }}</div>{% endif %}
+  {% elif op.status == "pending" %}
+    {% if op.waiting_on %}<div class="meta">After {{ op.waiting_on|join:", " }}</div>{% endif %}
+    {% if op.waiting_gates %}<div class="note note-hold">Waiting for: {{ op.waiting_gates|join:", " }}</div>{% endif %}
+    {% if op.earlier_steps %}<div class="meta">After {{ op.earlier_steps|join:", " }} (advisory)</div>{% endif %}
+  {% endif %}
 </a>
 {% endpartialdef %}
 {% endblock %}

@@ -10,7 +10,7 @@ from .. import schemas
 
 router = Router(tags=["Live board"])
 
-BoardStatus = Literal["", "attention", "in_progress", "paused", "on_hold", "pending", "late", "no_route", "completed"]
+BoardStatus = Literal["", "attention", "in_progress", "paused", "on_hold", "pending", "late", "gate", "no_route", "completed"]
 
 
 def _row(row):
@@ -24,6 +24,8 @@ def _row(row):
         "priority": schemas.PRIORITY_NAME.get(row.job.priority, str(row.job.priority)),
         "state": row.state,
         "current_operation": row.current,
+        "active_operations": row.active,
+        "gates_waiting": row.gates_waiting,
         "steps_done": row.done,
         "steps_total": row.total,
         "percent": row.percent,
@@ -44,7 +46,7 @@ def board_items(
     """One row per item: current step, state, progress, and late / at-risk flags.
 
     Completed items are left out unless `status=completed`. `attention` returns
-    items that are late, at risk or on hold.
+    items that are late, at risk or on hold; `gate` returns items waiting on a gate.
     """
     rows, summary = selectors.board_rows(q, customer_id, work_centre_id, status)
     return {"summary": summary, "items": [_row(row) for row in rows]}

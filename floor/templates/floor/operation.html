@@ -19,18 +19,23 @@
     {% if job.due_date %}· Due {{ job.due_date|date:"D j M Y" }}{% endif %}
   </p>
   {% if operation.status == "on_hold" %}<p class="note note-hold">On hold: {{ operation.hold_reason }}</p>{% endif %}
-  {% if waiting_on %}<p class="note">Cannot start until done: {{ waiting_on|join:", " }}</p>{% endif %}
+  {% if operation.status == "pending" %}
+    {% if readiness.start_blockers %}<p class="note">Cannot start until done: {{ readiness.start_blockers|join:", " }}</p>{% endif %}
+    {% if readiness.gate_blockers %}<p class="note note-hold">Waiting for: {{ readiness.gate_blockers|join:", " }}</p>{% endif %}
+    {% if readiness.warnings %}<p class="note">Earlier steps not finished: {{ readiness.warnings|join:", " }}</p>{% endif %}
+  {% endif %}
+  {% if readiness.finish_blockers and not operation.is_done %}<p class="note">Cannot complete until done: {{ readiness.finish_blockers|join:", " }}</p>{% endif %}
 
   <div class="actions">
     {% with next=request.get_full_path %}
     {% if operation.status == "pending" %}
       <form method="post" action="{% url 'floor:action' operation.pk 'start' %}">{% csrf_token %}
         <input type="hidden" name="station" value="{{ work_centre.pk }}"><input type="hidden" name="next" value="{{ next }}">
-        <button class="btn btn-primary" {% if waiting_on %}disabled{% endif %}>Start</button></form>
+        <button class="btn btn-primary" {% if not readiness.can_start %}disabled{% endif %}>Start</button></form>
     {% elif operation.status == "in_progress" %}
       <form method="post" action="{% url 'floor:action' operation.pk 'complete' %}">{% csrf_token %}
         <input type="hidden" name="station" value="{{ work_centre.pk }}"><input type="hidden" name="next" value="{{ next }}">
-        <button class="btn btn-success">Complete</button></form>
+        <button class="btn btn-success" {% if not readiness.can_complete %}disabled{% endif %}>Complete</button></form>
       <form method="post" action="{% url 'floor:action' operation.pk 'pause' %}">{% csrf_token %}
         <input type="hidden" name="station" value="{{ work_centre.pk }}"><input type="hidden" name="next" value="{{ next }}">
         <button class="btn">Pause</button></form>
@@ -40,7 +45,7 @@
         <button class="btn btn-primary">Resume</button></form>
       <form method="post" action="{% url 'floor:action' operation.pk 'complete' %}">{% csrf_token %}
         <input type="hidden" name="station" value="{{ work_centre.pk }}"><input type="hidden" name="next" value="{{ next }}">
-        <button class="btn btn-success">Complete</button></form>
+        <button class="btn btn-success" {% if not readiness.can_complete %}disabled{% endif %}>Complete</button></form>
     {% elif operation.status == "on_hold" %}
       <form method="post" action="{% url 'floor:action' operation.pk 'release' %}">{% csrf_token %}
         <input type="hidden" name="station" value="{{ work_centre.pk }}"><input type="hidden" name="next" value="{{ next }}">

@@ -56,17 +56,21 @@
       {% if op.item.job.priority >= 30 %}· {{ op.item.job.get_priority_display }} priority{% endif %}
     </p>
     {% if op.status == "on_hold" %}<p class="note note-hold">On hold: {{ op.hold_reason }}</p>{% endif %}
-    {% if op.waiting_on %}<p class="note">Cannot start until done: {{ op.waiting_on|join:", " }}</p>
-    {% elif op.earlier_steps and op.status == "pending" %}<p class="note">Earlier steps not finished: {{ op.earlier_steps|join:", " }}</p>{% endif %}
+    {% if op.status == "pending" %}
+      {% if op.waiting_on %}<p class="note">Cannot start until done: {{ op.waiting_on|join:", " }}</p>{% endif %}
+      {% if op.waiting_gates %}<p class="note note-hold">Waiting for: {{ op.waiting_gates|join:", " }}</p>{% endif %}
+      {% if op.earlier_steps %}<p class="note">Earlier steps not finished: {{ op.earlier_steps|join:", " }}</p>{% endif %}
+    {% endif %}
+    {% if op.finish_waiting %}<p class="note">Cannot complete until done: {{ op.finish_waiting|join:", " }}</p>{% endif %}
   </a>
 
   <div class="actions">
     {% if op.status == "pending" %}
-      <button class="btn btn-primary" {% if op.waiting_on %}disabled{% endif %}
+      <button class="btn btn-primary" {% if not op.can_start %}disabled{% endif %}
               hx-post="{% url 'floor:action' op.pk 'start' %}" hx-target="#queue"
               hx-vals='{"station": "{{ work_centre.pk }}", "q": "{{ q|escapejs }}"}'>Start</button>
     {% elif op.status == "in_progress" %}
-      <button class="btn btn-success"
+      <button class="btn btn-success" {% if op.finish_waiting %}disabled{% endif %}
               hx-post="{% url 'floor:action' op.pk 'complete' %}" hx-target="#queue"
               hx-vals='{"station": "{{ work_centre.pk }}", "q": "{{ q|escapejs }}"}'>Complete</button>
       <button class="btn"
@@ -76,7 +80,7 @@
       <button class="btn btn-primary"
               hx-post="{% url 'floor:action' op.pk 'resume' %}" hx-target="#queue"
               hx-vals='{"station": "{{ work_centre.pk }}", "q": "{{ q|escapejs }}"}'>Resume</button>
-      <button class="btn btn-success"
+      <button class="btn btn-success" {% if op.finish_waiting %}disabled{% endif %}
               hx-post="{% url 'floor:action' op.pk 'complete' %}" hx-target="#queue"
               hx-vals='{"station": "{{ work_centre.pk }}", "q": "{{ q|escapejs }}"}'>Complete</button>
     {% elif op.status == "on_hold" %}

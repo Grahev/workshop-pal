@@ -1,6 +1,8 @@
 from django.conf import settings
 from django.db import models
 
+from routing.models import Enforcement
+
 
 class Customer(models.Model):
     name = models.CharField(max_length=200, unique=True)
@@ -79,6 +81,10 @@ class JobItem(models.Model):
     quantity = models.PositiveIntegerField(default=1)
     spec = models.JSONField(default=dict, blank=True, help_text="Bespoke values keyed by the product type's spec fields")
     spec_version = models.PositiveIntegerField(default=1)
+    link_enforcement = models.CharField(
+        "default link enforcement", max_length=10, choices=Enforcement.choices, default=Enforcement.STRICT,
+        help_text="Default for new links between steps on this item's route.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

@@ -13,14 +13,14 @@ from floor.models import Event, Issue
 from resources.models import WorkCentre
 from routing.models import Operation
 
-from .. import lookups, schemas
+from .. import lookups, queries, schemas
 from ..auth import require_manage
 
 router = Router(tags=["Shop floor"])
 
 
 def _operations():
-    return Operation.objects.select_related("work_centre", "hold_reason", "item__job")
+    return queries.operations()
 
 
 def _events():
@@ -72,7 +72,7 @@ def work_centre_queue(request, work_centre_id: int, q: str = ""):
 def record_event(request, operation_id: int, payload: schemas.EventIn):
     """This is the only way an operation's status changes.
 
-    Allowed moves: `start` (pending), `pause` (in progress), `resume` (paused),
+    Allowed moves: `start` (pending, and nothing strict or gated outstanding), `pause` (in progress), `resume` (paused),
     `complete` (in progress or paused), `hold` (needs a hold reason), `release`,
     `rework` (completed; office roles only), `skip` (pending; office roles only), `note`.
     A move that is not allowed returns 409 and records nothing.

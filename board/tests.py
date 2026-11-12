@@ -8,7 +8,7 @@ from floor import services as floor
 from jobs.models import Customer, Job, JobItem
 from resources.models import Site, WorkCentre
 from routing.models import HoldReason
-from routing.services import add_operation
+from routing.services import add_steps
 
 from . import selectors
 
@@ -31,8 +31,7 @@ class BoardTestCase(TestCase):
         )
         item = JobItem.objects.create(job=job, name=f"Item {reference}")
         if route:
-            add_operation(item, "Cut", self.cut)
-            add_operation(item, "Weld", self.weld)
+            add_steps(item, [{"name": "Cut", "work_centre": self.cut}, {"name": "Weld", "work_centre": self.weld}])
         return item
 
     def row_for(self, item):
@@ -125,7 +124,7 @@ class LaneTests(BoardTestCase):
         lanes = {lane.work_centre.code: lane for lane in selectors.board_lanes()}
         self.assertEqual([op.name for op in lanes["CUT"].active], ["Cut"])
         self.assertEqual([op.name for op in lanes["WLD"].upcoming], ["Weld"])
-        self.assertEqual(lanes["WLD"].upcoming[0].earlier_steps, ["Cut"])
+        self.assertEqual(lanes["WLD"].upcoming[0].waiting_on, ["Cut"])
 
 
 class BoardViewTests(BoardTestCase):

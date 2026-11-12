@@ -3,6 +3,7 @@ from django.contrib.auth.decorators import login_required
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
+from django.utils.dateparse import parse_date
 from django.views.decorators.http import require_POST
 
 from accounts.permissions import can_manage, office_required, safe_next
@@ -11,7 +12,7 @@ from floor import services as floor_services
 from floor.models import Event, Issue
 from floor.services import InvalidTransition
 from routing import services as routing_services
-from routing.models import Operation, RouteTemplate
+from routing.models import Dependency, Enforcement, Gate, GateType, LinkKind, Operation, RouteTemplate
 from routing.services import RouteError
 
 from . import services
@@ -127,11 +128,7 @@ def item_detail(request, pk):
             messages.success(request, "Item updated.")
             return redirect("jobs:item", pk=item.pk)
 
-    operations = list(
-        item.operations.select_related("work_centre", "hold_reason")
-        .annotate(event_count=Count("events"))
-        .order_by("sequence", "id")
-    )
+    operations = list(routing_services.route_operations(item).annotate(event_count=Count("events")))
     for op in operations:
         op.can_remove = op.status == Operation.Status.PENDING and op.event_count == 0
     context = {
@@ -140,6 +137,10 @@ def item_detail(request, pk):
         "form": form,
         "spec_fields": services.spec_form_fields(item),
         "operations": operations,
+        "stages": routing_services.route_stages(operations),
+        "gates": item.gates.select_related("gate_type", "cleared_by").prefetch_related("operations"),
+        "gate_types": GateType.objects.filter(is_active=True),
+        "enforcements": Enforcement.choices,
         "operation_form": OperationForm(),
         "templates": RouteTemplate.objects.filter(is_active=True),
         "issues": Issue.objects.filter(operation__item=item).select_related("operation__item", "raised_by", "resolved_by"),
@@ -178,30 +179,166 @@ def route_apply(request, pk):
     return redirect("jobs:item", pk=item.pk)
 
 
+def _route_url(item_id):
+    return reverse("jobs:item", args=[item_id]) + "#route"
+
+
+def _choice(value, choices, default=None):
+    return value if value in choices.values else default
+
+
 @office_required
 @require_POST
 def operation_add(request, pk):
     item = get_object_or_404(JobItem, pk=pk)
     form = OperationForm(request.POST)
-    if form.is_valid():
-        routing_services.add_operation(item, **form.cleaned_data)
-    else:
+    if not form.is_valid():
         messages.error(request, "Give the step a name and a work centre.")
-    return redirect(reverse("jobs:item", args=[item.pk]) + "#route")
+        return redirect(_route_url(item.pk))
+    try:
+        routing_services.add_operation(
+            item,
+            after=item.operations.filter(pk__in=request.POST.getlist("after")),
+            gate_types=GateType.objects.filter(pk__in=request.POST.getlist("needs")),
+            **form.cleaned_data,
+        )
+    except RouteError as exc:
+        messages.error(request, str(exc))
+    return redirect(_route_url(item.pk))
 
 
 @office_required
 def operation_edit(request, pk):
-    operation = get_object_or_404(Operation.objects.select_related("item__job"), pk=pk)
+    """Step editor: details, what the step comes after, and what it needs."""
+    operation = get_object_or_404(Operation.objects.select_related("item__job", "work_centre"), pk=pk)
     form = OperationForm(request.POST or None, instance=operation)
     if request.method == "POST" and form.is_valid():
         try:
             # Reload so the status check is against the database, not the form's copy.
             routing_services.update_operation(Operation.objects.get(pk=pk), **form.cleaned_data)
+            messages.success(request, "Step saved.")
         except RouteError as exc:
             messages.error(request, str(exc))
-        return redirect(reverse("jobs:item", args=[operation.item_id]) + "#route")
-    return render(request, "jobs/operation_form.html", {"form": form, "operation": operation})
+        return redirect("jobs:operation_edit", pk=pk)
+
+    links = operation.dependencies.select_related("predecessor")
+    linked = {link.predecessor_id for link in links}
+    context = {
+        "form": form,
+        "operation": operation,
+        "links": links,
+        "candidates": operation.item.operations.exclude(pk=operation.pk).exclude(pk__in=linked).order_by("sequence", "id"),
+        "kinds": LinkKind.choices,
+        "enforcements": Enforcement.choices,
+        "default_enforcement": operation.item.link_enforcement,
+        "gate_types": GateType.objects.filter(is_active=True),
+        "needed": set(operation.gates.values_list("gate_type_id", flat=True)),
+    }
+    return render(request, "jobs/operation_form.html", context)
+
+
+@office_required
+@require_POST
+def link_add(request, pk):
+    operation = get_object_or_404(Operation.objects.select_related("item"), pk=pk)
+    predecessor = get_object_or_404(Operation, pk=request.POST.get("predecessor") or 0)
+    try:
+        routing_services.add_link(
+            operation, predecessor,
+            kind=_choice(request.POST.get("kind"), LinkKind, LinkKind.FINISH_TO_START),
+            enforcement=_choice(request.POST.get("enforcement"), Enforcement),
+        )
+    except RouteError as exc:
+        messages.error(request, str(exc))
+    return redirect("jobs:operation_edit", pk=operation.pk)
+
+
+@office_required
+@require_POST
+def link_update(request, pk):
+    link = get_object_or_404(Dependency.objects.select_related("operation", "predecessor"), pk=pk)
+    try:
+        routing_services.update_link(
+            link,
+            kind=_choice(request.POST.get("kind"), LinkKind),
+            enforcement=_choice(request.POST.get("enforcement"), Enforcement),
+        )
+    except RouteError as exc:
+        messages.error(request, str(exc))
+    return redirect("jobs:operation_edit", pk=link.operation_id)
+
+
+@office_required
+@require_POST
+def link_remove(request, pk):
+    link = get_object_or_404(Dependency, pk=pk)
+    routing_services.remove_link(link)
+    return redirect("jobs:operation_edit", pk=link.operation_id)
+
+
+@office_required
+@require_POST
+def operation_gates(request, pk):
+    operation = get_object_or_404(Operation.objects.select_related("item"), pk=pk)
+    try:
+        routing_services.set_required_gates(operation, GateType.objects.filter(pk__in=request.POST.getlist("needs")))
+        messages.success(request, "Requirements saved.")
+    except RouteError as exc:
+        messages.error(request, str(exc))
+    return redirect("jobs:operation_edit", pk=operation.pk)
+
+
+@office_required
+@require_POST
+def route_sequence(request, pk):
+    """Shortcut: re-link the whole route as a plain chain in its current order."""
+    item = get_object_or_404(JobItem, pk=pk)
+    try:
+        routing_services.set_simple_sequence(item, _choice(request.POST.get("enforcement"), Enforcement))
+        messages.success(request, "Route re-linked as a simple sequence.")
+    except RouteError as exc:
+        messages.error(request, str(exc))
+    return redirect(_route_url(item.pk))
+
+
+@office_required
+@require_POST
+def route_enforcement(request, pk):
+    item = get_object_or_404(JobItem, pk=pk)
+    try:
+        routing_services.set_default_enforcement(item, request.POST.get("enforcement"))
+    except RouteError as exc:
+        messages.error(request, str(exc))
+    return redirect(_route_url(item.pk))
+
+
+@office_required
+@require_POST
+def route_save_template(request, pk):
+    item = get_object_or_404(JobItem.objects.select_related("product_type"), pk=pk)
+    try:
+        template = routing_services.save_as_template(item, request.POST.get("name"), product_type=item.product_type)
+        messages.success(request, f"Saved as template '{template.name}'.")
+    except RouteError as exc:
+        messages.error(request, str(exc))
+    return redirect(_route_url(item.pk))
+
+
+# ---------------------------------------------------------------- gates
+
+@office_required
+@require_POST
+def gate_update(request, pk, action):
+    """Clear a gate (the thing has arrived), reopen it, or set when it is expected."""
+    gate = get_object_or_404(Gate.objects.select_related("gate_type"), pk=pk)
+    note = request.POST.get("note", "").strip()
+    if action == "clear":
+        routing_services.clear_gate(gate, user=request.user, note=note)
+    elif action == "reopen":
+        routing_services.reopen_gate(gate, user=request.user, note=note)
+    elif action == "expected":
+        routing_services.set_gate_expected(gate, parse_date(request.POST.get("expected_date") or "") or None)
+    return redirect(safe_next(request, reverse("jobs:item", args=[gate.item_id]) + "#gates"))
 
 
 @office_required

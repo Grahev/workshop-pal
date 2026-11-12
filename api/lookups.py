@@ -4,7 +4,7 @@ from ninja.errors import HttpError
 
 from jobs.models import Customer, ProductType
 from resources.models import Site, WorkCentre
-from routing.models import HoldReason, RouteTemplate
+from routing.models import GateType, HoldReason, RouteTemplate
 
 
 def _missing(what, value):
@@ -83,4 +83,19 @@ def route_template(template_id):
     found = RouteTemplate.objects.filter(pk=template_id).first()
     if not found:
         raise _missing("Route template", template_id)
+    return found
+
+
+def gate_type(gate_type_id=None, name=None):
+    if gate_type_id:
+        found = GateType.objects.filter(pk=gate_type_id).first()
+        if not found:
+            raise _missing("Gate type", gate_type_id)
+        return found
+    name = (name or "").strip()
+    if not name:
+        raise HttpError(422, "Give gate_type_id or gate_type (name).")
+    found = GateType.objects.filter(name__iexact=name).first()
+    if not found:
+        raise _missing("Gate type", name)
     return found

@@ -80,6 +80,17 @@
               <a href="{% url 'floor:operation' op.pk %}"><strong>{{ op.name }}</strong></a>
               <span class="meta">{{ op.work_centre.name }}{% if op.estimated_minutes %} · {{ op.estimated_minutes }} min{% endif %}</span>
               {% if op.status == "on_hold" %}<span class="note note-hold">{{ op.hold_reason }}</span>{% endif %}
+              <div class="chips">
+                {% for link in op.dependencies.all %}
+                  <span class="chip {% if link.predecessor.is_done %}chip-completed{% elif link.enforcement == 'strict' %}chip-strict{% endif %}"
+                        title="{{ link.get_kind_display }} · {{ link.get_enforcement_display }}">After {{ link.predecessor.name }}{% if link.kind == "finish_to_finish" %} (to finish){% endif %}{% if link.enforcement == "advisory" %} · advisory{% endif %}</span>
+                {% empty %}
+                  <span class="chip">Can start straight away</span>
+                {% endfor %}
+                {% for gate in op.gates.all %}
+                  <span class="chip {% if gate.is_cleared %}chip-completed{% else %}chip-on_hold{% endif %}">Needs {{ gate.gate_type.name }}{% if gate.is_cleared %} ✓{% endif %}</span>
+                {% endfor %}
+              </div>
             </div>
             <span class="badge badge-{{ op.status }}">{{ op.get_status_display }}</span>
             {% if can_manage %}
@@ -88,8 +99,8 @@
                   <button class="btn btn-icon" aria-label="Move {{ op.name }} up" {% if forloop.first %}disabled{% endif %}>↑</button></form>
                 <form method="post" action="{% url 'jobs:operation_move' op.pk 'down' %}">{% csrf_token %}
                   <button class="btn btn-icon" aria-label="Move {{ op.name }} down" {% if forloop.last %}disabled{% endif %}>↓</button></form>
+                <a class="btn btn-small" href="{% url 'jobs:operation_edit' op.pk %}">Edit links</a>
                 {% if op.status == "pending" %}
-                  <a class="btn btn-small" href="{% url 'jobs:operation_edit' op.pk %}">Edit</a>
                   {% if op.can_remove %}
                     <form method="post" action="{% url 'jobs:operation_remove' op.pk %}">{% csrf_token %}
                       <button class="btn btn-small">Remove</button></form>
@@ -99,6 +110,23 @@
                 {% endif %}
               </div>
             {% endif %}
+          </li>
+        {% endfor %}
+      </ol>
+
+      <h3>How it flows</h3>
+      <p class="meta">Steps side by side can run at the same time.</p>
+      <ol class="stages">
+        {% for stage in stages %}
+          <li>
+            <span class="stage-n">{{ forloop.counter }}</span>
+            <div class="stage-steps">
+              {% for op in stage %}
+                <span class="stage-step status-{{ op.status }}">{{ op.name }}
+                  {% for gate in op.gates.all %}{% if not gate.is_cleared %}<span class="meta">needs {{ gate.gate_type.name }}</span>{% endif %}{% endfor %}
+                </span>
+              {% endfor %}
+            </div>
           </li>
         {% endfor %}
       </ol>
@@ -122,9 +150,89 @@
         <form method="post" action="{% url 'jobs:operation_add' item.pk %}" class="form panel">
           {% csrf_token %}
           {{ operation_form.as_div }}
+          {% if operations %}
+            <fieldset class="checks">
+              <legend>Comes after</legend>
+              {% for op in operations %}
+                <label><input type="checkbox" name="after" value="{{ op.pk }}" {% if forloop.last %}checked{% endif %}> {{ op.name }}</label>
+              {% endfor %}
+              <p class="meta">Untick everything for a step that can start straight away. Links use this route's default ({{ item.get_link_enforcement_display|lower }}).</p>
+            </fieldset>
+          {% endif %}
+          {% if gate_types %}
+            <fieldset class="checks">
+              <legend>Needs</legend>
+              {% for gate_type in gate_types %}
+                <label><input type="checkbox" name="needs" value="{{ gate_type.pk }}"> {{ gate_type.name }}</label>
+              {% endfor %}
+            </fieldset>
+          {% endif %}
           <div class="form-actions"><button type="submit" class="btn btn-primary">Add step</button></div>
         </form>
       </details>
+
+      {% if operations %}
+        <details class="disclosure">
+          <summary class="btn btn-small">Route settings</summary>
+          <div class="panel">
+            <form method="post" action="{% url 'jobs:route_enforcement' item.pk %}" class="inline-form">
+              {% csrf_token %}
+              <label for="id_default_enforcement">Default for new links</label>
+              <select id="id_default_enforcement" name="enforcement">
+                {% for value, label in enforcements %}<option value="{{ value }}" {% if value == item.link_enforcement %}selected{% endif %}>{{ label }}</option>{% endfor %}
+              </select>
+              <button class="btn btn-small">Save</button>
+            </form>
+            <form method="post" action="{% url 'jobs:route_sequence' item.pk %}" class="inline-form">
+              {% csrf_token %}
+              <label for="id_sequence_enforcement">Re-link as a simple sequence</label>
+              <select id="id_sequence_enforcement" name="enforcement">
+                {% for value, label in enforcements %}<option value="{{ value }}" {% if value == item.link_enforcement %}selected{% endif %}>{{ label }}</option>{% endfor %}
+              </select>
+              <button class="btn btn-small btn-warn">Replace all links</button>
+            </form>
+            <form method="post" action="{% url 'jobs:route_save_template' item.pk %}" class="inline-form">
+              {% csrf_token %}
+              <label for="id_template_name">Save this route as a template</label>
+              <input id="id_template_name" type="text" name="name" placeholder="Template name" autocomplete="off" required>
+              <button class="btn btn-small">Save template</button>
+            </form>
+          </div>
+        </details>
+      {% endif %}
+    {% endif %}
+
+    <h2 id="gates">Gates <span class="count">{{ gates|length }}</span></h2>
+    {% if gates %}
+      <ul class="issues">
+        {% for gate in gates %}
+          <li class="{% if not gate.is_cleared %}issue-open{% endif %}">
+            <div>
+              <strong>{{ gate.gate_type.name }}</strong>
+              <span class="badge {% if gate.is_cleared %}badge-completed{% else %}badge-on_hold{% endif %}">{% if gate.is_cleared %}Available{% else %}Waiting{% endif %}</span>
+            </div>
+            <span class="meta">Needed by: {% for op in gate.operations.all %}{{ op.name }}{% if not forloop.last %}, {% endif %}{% empty %}no steps{% endfor %}
+              {% if gate.is_cleared %} · cleared {{ gate.cleared_at|date:"D j M, H:i" }}{% if gate.cleared_by %} by {{ gate.cleared_by }}{% endif %}
+              {% elif gate.expected_date %} · expected {{ gate.expected_date|date:"D j M" }}{% endif %}</span>
+            {% if gate.note %}<p>{{ gate.note }}</p>{% endif %}
+            {% if can_manage %}
+              {% if gate.is_cleared %}
+                <form method="post" action="{% url 'jobs:gate_update' gate.pk 'reopen' %}" class="inline-form">{% csrf_token %}
+                  <button class="btn btn-small btn-quiet">Mark as waiting again</button></form>
+              {% else %}
+                <form method="post" action="{% url 'jobs:gate_update' gate.pk 'clear' %}" class="inline-form">{% csrf_token %}
+                  <input type="text" name="note" placeholder="Note (optional)" aria-label="Note" autocomplete="off">
+                  <button class="btn btn-small btn-success">Mark available</button></form>
+                <form method="post" action="{% url 'jobs:gate_update' gate.pk 'expected' %}" class="inline-form">{% csrf_token %}
+                  <input type="date" name="expected_date" value="{{ gate.expected_date|date:'Y-m-d' }}" aria-label="Expected date">
+                  <button class="btn btn-small">Set expected date</button></form>
+              {% endif %}
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="empty">No gates. Add one to a step under "Edit links" to make it wait for hardware, material or approval.</p>
     {% endif %}
 
     {% include "floor/_issues.html" with issues=issues %}

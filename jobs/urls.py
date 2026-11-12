@@ -19,5 +19,13 @@ urlpatterns = [
     path("operations/<int:pk>/move/<str:direction>/", views.operation_move, name="operation_move"),
     path("operations/<int:pk>/remove/", views.operation_remove, name="operation_remove"),
     path("operations/<int:pk>/skip/", views.operation_skip, name="operation_skip"),
+    path("operations/<int:pk>/links/add/", views.link_add, name="link_add"),
+    path("operations/<int:pk>/gates/", views.operation_gates, name="operation_gates"),
+    path("links/<int:pk>/update/", views.link_update, name="link_update"),
+    path("links/<int:pk>/remove/", views.link_remove, name="link_remove"),
+    path("items/<int:pk>/route/sequence/", views.route_sequence, name="route_sequence"),
+    path("items/<int:pk>/route/enforcement/", views.route_enforcement, name="route_enforcement"),
+    path("items/<int:pk>/route/save-template/", views.route_save_template, name="route_save_template"),
+    path("gates/<int:pk>/<str:action>/", views.gate_update, name="gate_update"),
     path("issues/<int:pk>/resolve/", views.issue_resolve, name="issue_resolve"),
 ]
