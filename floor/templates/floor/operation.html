@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}{{ job.reference }} {{ operation.name }} · Workshop Pal{% endblock %}
+{% block topbar %}{{ work_centre.name }}{% endblock %}
+
+{% block content %}
+<p><a class="back" href="{% url 'floor:station' work_centre.pk %}">‹ Back to queue</a></p>
+
+<section class="card status-{{ operation.status }} card-detail">
+  <div class="card-top">
+    <span class="ref">{{ job.reference }}</span>
+    <span class="badge badge-{{ operation.status }}">{{ operation.get_status_display }}</span>
+    <span class="code">OP-{{ operation.pk }}</span>
+  </div>
+  <h1>{{ operation.name }} · {{ item.name }}</h1>
+  <p class="meta">
+    {{ job.customer.name }} · {{ job.title }} · Qty {{ item.quantity }}
+    {% if job.due_date %}· Due {{ job.due_date|date:"D j M Y" }}{% endif %}
+  </p>
+  {% if operation.status == "on_hold" %}<p class="note note-hold">On hold: {{ operation.hold_reason }}</p>{% endif %}
+  {% if waiting_on %}<p class="note">Cannot start until done: {{ waiting_on|join:", " }}</p>{% endif %}
+
+  <div class="actions">
+    {% with next=request.get_full_path %}
+    {% if operation.status == "pending" %}
+      <form method="post" action="{% url 'floor:action' operation.pk 'start' %}">{% csrf_token %}
+        <input type="hidden" name="station" value="{{ work_centre.pk }}"><input type="hidden" name="next" value="{{ next }}">
+        <button class="btn btn-primary" {% if waiting_on %}disabled{% endif %}>Start</button></form>
+    {% elif operation.status == "in_progress" %}
+      <form method="post" action="{% url 'floor:action' operation.pk 'complete' %}">{% csrf_token %}
+        <input type="hidden" name="station" value="{{ work_centre.pk }}"><input type="hidden" name="next" value="{{ next }}">
+        <button class="btn btn-success">Complete</button></form>
+      <form method="post" action="{% url 'floor:action' operation.pk 'pause' %}">{% csrf_token %}
+        <input type="hidden" name="station" value="{{ work_centre.pk }}"><input type="hidden" name="next" value="{{ next }}">
+        <button class="btn">Pause</button></form>
+    {% elif operation.status == "paused" %}
+      <form method="post" action="{% url 'floor:action' operation.pk 'resume' %}">{% csrf_token %}
+        <input type="hidden" name="station" value="{{ work_centre.pk }}"><input type="hidden" name="next" value="{{ next }}">
+        <button class="btn btn-primary">Resume</button></form>
+      <form method="post" action="{% url 'floor:action' operation.pk 'complete' %}">{% csrf_token %}
+        <input type="hidden" name="station" value="{{ work_centre.pk }}"><input type="hidden" name="next" value="{{ next }}">
+        <button class="btn btn-success">Complete</button></form>
+    {% elif operation.status == "on_hold" %}
+      <form method="post" action="{% url 'floor:action' operation.pk 'release' %}">{% csrf_token %}
+        <input type="hidden" name="station" value="{{ work_centre.pk }}"><input type="hidden" name="next" value="{{ next }}">
+        <button class="btn btn-primary">Release hold</button></form>
+    {% endif %}
+
+    {% if operation.status != "on_hold" and not operation.is_done %}
+      <details class="hold">
+        <summary class="btn btn-warn">Hold</summary>
+        <form class="hold-form" method="post" action="{% url 'floor:action' operation.pk 'hold' %}">{% csrf_token %}
+          <input type="hidden" name="station" value="{{ work_centre.pk }}"><input type="hidden" name="next" value="{{ next }}">
+          <label>Reason
+            <select name="hold_reason" required>
+              <option value="">Choose…</option>
+              {% for reason in hold_reasons %}<option value="{{ reason.pk }}">{{ reason.name }}</option>{% endfor %}
+            </select>
+          </label>
+          <label>Note (optional) <input type="text" name="note" autocomplete="off"></label>
+          <button type="submit" class="btn btn-warn">Confirm hold</button>
+        </form>
+      </details>
+    {% endif %}
+    {% endwith %}
+  </div>
+</section>
+
+<div class="columns">
+  <section>
+    <h2>Specification <span class="count">v{{ item.spec_version }}</span></h2>
+    {% if spec_rows %}
+      <dl class="spec">
+        {% for label, value in spec_rows %}<div><dt>{{ label }}</dt><dd>{{ value }}</dd></div>{% endfor %}
+      </dl>
+    {% else %}<p class="empty">No spec recorded for this item.</p>{% endif %}
+    {% if job.notes %}<h3>Job notes</h3><p>{{ job.notes|linebreaksbr }}</p>{% endif %}
+
+    <h2>Drawings and files</h2>
+    {% if attachments %}
+      <ul class="files">
+        {% for file in attachments %}
+          <li><a href="{{ file.file.url }}" target="_blank" rel="noopener">{{ file.original_filename }}</a>
+            <span class="meta">{{ file.get_category_display }}{% if file.revision %} · rev {{ file.revision }}{% endif %}</span></li>
+        {% endfor %}
+      </ul>
+    {% else %}<p class="empty">No files attached.</p>{% endif %}
+  </section>
+
+  <section>
+    <h2>Route</h2>
+    <ol class="route">
+      {% for step in route %}
+        <li class="{% if step.pk == operation.pk %}current{% endif %}">
+          <span>{{ step.name }} <span class="meta">{{ step.work_centre.code }}</span></span>
+          <span class="badge badge-{{ step.status }}">{{ step.get_status_display }}</span>
+        </li>
+      {% endfor %}
+    </ol>
+
+    <h2>History</h2>
+    <form method="post" action="{% url 'floor:action' operation.pk 'note' %}" class="note-form">{% csrf_token %}
+      <input type="hidden" name="station" value="{{ work_centre.pk }}">
+      <input type="hidden" name="next" value="{{ request.get_full_path }}">
+      <input type="text" name="note" placeholder="Add a note" autocomplete="off" aria-label="Add a note" required>
+      <button class="btn">Add</button>
+    </form>
+    {% if events %}
+      <ul class="timeline">
+        {% for event in events %}
+          <li>
+            <strong>{{ event.get_type_display }}</strong>
+            {% if event.hold_reason %}· {{ event.hold_reason }}{% endif %}
+            <span class="meta">{{ event.occurred_at|date:"D j M, H:i" }}{% if event.user %} · {{ event.user }}{% endif %}</span>
+            {% if event.note %}<p>{{ event.note }}</p>{% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}<p class="empty">Nothing recorded yet.</p>{% endif %}
+  </section>
+</div>
+{% endblock %}

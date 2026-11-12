@@ -86,6 +86,11 @@ USE_TZ = True
 
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+STATICFILES_DIRS = [BASE_DIR / "static"]
+
+LOGIN_URL = "login"
+LOGIN_REDIRECT_URL = "floor:home"
+LOGOUT_REDIRECT_URL = "login"
 
 # Uploaded files. Local disk in development; swap the default storage for
 # django-storages (S3-compatible) in production.

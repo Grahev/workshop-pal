@@ -1,0 +1,29 @@
+{% load static %}<!doctype html>
+<html lang="en-gb">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Workshop Pal{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'css/app.css' %}">
+  <script src="{% static 'js/htmx.min.js' %}" defer></script>
+</head>
+<body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
+  <header class="topbar">
+    <a class="brand" href="{% url 'floor:home' %}">Workshop Pal</a>
+    <span class="topbar-title">{% block topbar %}{% endblock %}</span>
+    {% if user.is_authenticated %}
+      <form method="post" action="{% url 'logout' %}" class="topbar-user">
+        {% csrf_token %}
+        <span>{{ user }}</span>
+        <button type="submit" class="btn btn-quiet btn-small">Sign out</button>
+      </form>
+    {% endif %}
+  </header>
+  <main>
+    {% for message in messages %}
+      <p class="alert alert-{{ message.tags }}" role="alert">{{ message }}</p>
+    {% endfor %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

@@ -12,7 +12,25 @@ python manage.py createsuperuser
 python manage.py runserver
 ```
 
-Then open http://127.0.0.1:8000/admin/.
+Then open http://127.0.0.1:8000/ for the workstation screen, or /admin/ for the back office.
+
+To try it with sample jobs on an empty database:
+
+```bash
+python manage.py seed_demo
+```
+
+## Workstation screen
+
+- `/floor/` choose the work centre this device is at
+- `/floor/station/<id>/` the queue: in progress, on hold, ready to start, coming up.
+  One tap to start, pause, resume, complete, hold (with reason) or release. Refreshes every 10 seconds.
+- Scan or type a job number to filter the queue. Scanning `OP-<id>` opens that operation directly;
+  that is the code to print as a barcode or QR on job sheets.
+- `/floor/operation/<id>/` spec, drawings, the item's route, history and notes
+
+Pages are Django templates with HTMX (vendored in `static/js`, so it works without internet).
+The queue is an inline template partial, so the full page and the HTMX refresh share one template.
 
 Runs on SQLite with no configuration. For Postgres, set `DATABASE_URL` (see `.env.example`).
 

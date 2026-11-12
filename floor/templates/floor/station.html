@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}{{ work_centre.name }} · Workshop Pal{% endblock %}
+{% block topbar %}{{ work_centre.name }}{% endblock %}
+
+{% block content %}
+<form method="get" class="scan">
+  <input type="search" name="q" value="{{ q }}" placeholder="Scan job sheet or type job number"
+         autocomplete="off" autocapitalize="characters" autofocus aria-label="Scan or search">
+  <button type="submit" class="btn">Find</button>
+  {% if q %}<a class="btn btn-quiet" href="{% url 'floor:station' work_centre.pk %}">Clear</a>{% endif %}
+</form>
+
+{# Refreshes every 10s, but not while someone has a hold form open. #}
+<div id="queue"
+     hx-get="{% url 'floor:station' work_centre.pk %}{% if q %}?q={{ q|urlencode }}{% endif %}"
+     hx-trigger="every 10s [!document.querySelector('#queue details[open]')]"
+     hx-swap="innerHTML">
+{% partialdef queue inline %}
+  {% if error %}<p class="alert alert-error" role="alert">{{ error }}</p>{% endif %}
+
+  {% if queue.active %}
+    <h2>In progress <span class="count">{{ queue.active|length }}</span></h2>
+    {% for op in queue.active %}{% partial card %}{% endfor %}
+  {% endif %}
+
+  {% if queue.on_hold %}
+    <h2>On hold <span class="count">{{ queue.on_hold|length }}</span></h2>
+    {% for op in queue.on_hold %}{% partial card %}{% endfor %}
+  {% endif %}
+
+  <h2>Ready to start <span class="count">{{ queue.ready|length }}</span></h2>
+  {% for op in queue.ready %}{% partial card %}{% empty %}
+    <p class="empty">{% if q %}Nothing matches "{{ q }}".{% else %}Nothing waiting at this work centre.{% endif %}</p>
+  {% endfor %}
+
+  {% if queue.upcoming %}
+    <h2>Coming up <span class="count">{{ queue.upcoming|length }}</span></h2>
+    {% for op in queue.upcoming %}{% partial card %}{% endfor %}
+  {% endif %}
+{% endpartialdef %}
+</div>
+
+{% partialdef card %}
+<article class="card status-{{ op.status }}">
+  <a class="card-main" href="{% url 'floor:operation' op.pk %}?station={{ work_centre.pk }}">
+    <div class="card-top">
+      <span class="ref">{{ op.item.job.reference }}</span>
+      <span class="badge badge-{{ op.status }}">{{ op.get_status_display }}</span>
+      {% if op.is_late %}<span class="badge badge-late">Late</span>{% endif %}
+      {% if op.rework_count %}<span class="badge badge-rework">Rework</span>{% endif %}
+    </div>
+    <h3>{{ op.name }} · {{ op.item.name }}</h3>
+    <p class="meta">
+      {{ op.item.job.customer.name }} · Qty {{ op.item.quantity }}
+      {% if op.item.job.due_date %}· Due {{ op.item.job.due_date|date:"D j M" }}{% endif %}
+      {% if op.item.job.priority >= 30 %}· {{ op.item.job.get_priority_display }} priority{% endif %}
+    </p>
+    {% if op.status == "on_hold" %}<p class="note note-hold">On hold: {{ op.hold_reason }}</p>{% endif %}
+    {% if op.waiting_on %}<p class="note">Cannot start until done: {{ op.waiting_on|join:", " }}</p>
+    {% elif op.earlier_steps and op.status == "pending" %}<p class="note">Earlier steps not finished: {{ op.earlier_steps|join:", " }}</p>{% endif %}
+  </a>
+
+  <div class="actions">
+    {% if op.status == "pending" %}
+      <button class="btn btn-primary" {% if op.waiting_on %}disabled{% endif %}
+              hx-post="{% url 'floor:action' op.pk 'start' %}" hx-target="#queue"
+              hx-vals='{"station": "{{ work_centre.pk }}", "q": "{{ q|escapejs }}"}'>Start</button>
+    {% elif op.status == "in_progress" %}
+      <button class="btn btn-success"
+              hx-post="{% url 'floor:action' op.pk 'complete' %}" hx-target="#queue"
+              hx-vals='{"station": "{{ work_centre.pk }}", "q": "{{ q|escapejs }}"}'>Complete</button>
+      <button class="btn"
+              hx-post="{% url 'floor:action' op.pk 'pause' %}" hx-target="#queue"
+              hx-vals='{"station": "{{ work_centre.pk }}", "q": "{{ q|escapejs }}"}'>Pause</button>
+    {% elif op.status == "paused" %}
+      <button class="btn btn-primary"
+              hx-post="{% url 'floor:action' op.pk 'resume' %}" hx-target="#queue"
+              hx-vals='{"station": "{{ work_centre.pk }}", "q": "{{ q|escapejs }}"}'>Resume</button>
+      <button class="btn btn-success"
+              hx-post="{% url 'floor:action' op.pk 'complete' %}" hx-target="#queue"
+              hx-vals='{"station": "{{ work_centre.pk }}", "q": "{{ q|escapejs }}"}'>Complete</button>
+    {% elif op.status == "on_hold" %}
+      <button class="btn btn-primary"
+              hx-post="{% url 'floor:action' op.pk 'release' %}" hx-target="#queue"
+              hx-vals='{"station": "{{ work_centre.pk }}", "q": "{{ q|escapejs }}"}'>Release hold</button>
+    {% endif %}
+
+    {% if op.status != "on_hold" %}
+      <details class="hold">
+        <summary class="btn btn-warn">Hold</summary>
+        <form class="hold-form" hx-post="{% url 'floor:action' op.pk 'hold' %}" hx-target="#queue">
+          <input type="hidden" name="station" value="{{ work_centre.pk }}">
+          <input type="hidden" name="q" value="{{ q }}">
+          <label>Reason
+            <select name="hold_reason" required>
+              <option value="">Choose…</option>
+              {% for reason in hold_reasons %}<option value="{{ reason.pk }}">{{ reason.name }}</option>{% endfor %}
+            </select>
+          </label>
+          <label>Note (optional)
+            <input type="text" name="note" autocomplete="off">
+          </label>
+          <button type="submit" class="btn btn-warn">Confirm hold</button>
+        </form>
+      </details>
+    {% endif %}
+  </div>
+</article>
+{% endpartialdef %}
+{% endblock %}

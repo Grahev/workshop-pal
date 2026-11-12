@@ -128,3 +128,88 @@ class EventImmutabilityTests(FloorTestCase):
             event.save()
         with self.assertRaises(TypeError):
             event.delete()
+
+
+class WorkstationViewTests(FloorTestCase):
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(self.user)
+
+    def test_login_required(self):
+        self.client.logout()
+        response = self.client.get(f"/floor/station/{self.cut.pk}/")
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/accounts/login/", response["Location"])
+
+    def test_home_lists_work_centres(self):
+        response = self.client.get("/floor/")
+        self.assertContains(response, "Cutting")
+        self.assertContains(response, "Welding")
+
+    def test_queue_shows_ready_and_upcoming(self):
+        response = self.client.get(f"/floor/station/{self.cut.pk}/")
+        self.assertEqual([op.name for op in response.context["queue"]["ready"]], ["Cut"])
+
+        response = self.client.get(f"/floor/station/{self.weld.pk}/")
+        upcoming = response.context["queue"]["upcoming"]
+        self.assertEqual([op.name for op in upcoming], ["Weld"])
+        self.assertEqual(upcoming[0].earlier_steps, ["Cut"])
+        self.assertContains(response, "Earlier steps not finished: Cut")
+
+    def test_htmx_start_returns_queue_fragment_and_records_event(self):
+        response = self.client.post(
+            f"/floor/operation/{self.op_cut.pk}/start/", {"station": self.cut.pk}, headers={"HX-Request": "true"}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "<html")
+        self.assertContains(response, "Complete")
+        self.op_cut.refresh_from_db()
+        self.assertEqual(self.op_cut.status, Status.IN_PROGRESS)
+        event = self.op_cut.events.get()
+        self.assertEqual((event.user, event.work_centre), (self.user, self.cut))
+
+    def test_invalid_action_shows_error_in_fragment(self):
+        response = self.client.post(
+            f"/floor/operation/{self.op_cut.pk}/complete/", {"station": self.cut.pk}, headers={"HX-Request": "true"}
+        )
+        self.assertContains(response, "Cannot complete")
+        self.assertEqual(Event.objects.count(), 0)
+
+    def test_hold_with_reason_from_queue(self):
+        self.client.post(
+            f"/floor/operation/{self.op_cut.pk}/hold/",
+            {"station": self.cut.pk, "hold_reason": self.waiting.pk, "note": "Plate late"},
+            headers={"HX-Request": "true"},
+        )
+        self.op_cut.refresh_from_db()
+        self.assertEqual(self.op_cut.status, Status.ON_HOLD)
+        self.assertEqual(self.op_cut.events.get().note, "Plate late")
+
+    def test_hard_dependency_disables_start(self):
+        self.op_weld.depends_on.add(self.op_cut)
+        response = self.client.get(f"/floor/station/{self.weld.pk}/")
+        self.assertContains(response, "Cannot start until done: Cut")
+
+    def test_scan_operation_code_opens_detail(self):
+        response = self.client.get(f"/floor/station/{self.cut.pk}/", {"q": f"OP-{self.op_cut.pk}"})
+        self.assertRedirects(response, f"/floor/operation/{self.op_cut.pk}/?station={self.cut.pk}")
+
+    def test_search_filters_by_job_reference(self):
+        response = self.client.get(f"/floor/station/{self.cut.pk}/", {"q": "nope"})
+        self.assertEqual(response.context["queue"]["ready"], [])
+        self.assertContains(response, "Nothing matches")
+
+    def test_detail_page_and_plain_form_action(self):
+        url = f"/floor/operation/{self.op_cut.pk}/?station={self.cut.pk}"
+        self.assertContains(self.client.get(url), "Specification")
+        response = self.client.post(
+            f"/floor/operation/{self.op_cut.pk}/start/", {"station": self.cut.pk, "next": url}
+        )
+        self.assertRedirects(response, url)
+        self.assertContains(self.client.get(url), "Started")
+
+    def test_unsafe_next_is_ignored(self):
+        response = self.client.post(
+            f"/floor/operation/{self.op_cut.pk}/start/", {"station": self.cut.pk, "next": "https://evil.example/"}
+        )
+        self.assertRedirects(response, f"/floor/station/{self.cut.pk}/")

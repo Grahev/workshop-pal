@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Choose your work centre</h1>
+{% if work_centres %}
+  <div class="tiles">
+    {% for wc in work_centres %}
+      <a class="tile" href="{% url 'floor:station' wc.pk %}">
+        <span class="tile-code">{{ wc.code }}</span>
+        <span class="tile-name">{{ wc.name }}</span>
+      </a>
+    {% endfor %}
+  </div>
+{% else %}
+  <p class="empty">No work centres yet. Add them in the <a href="{% url 'admin:index' %}">admin</a>.</p>
+{% endif %}
+{% endblock %}
